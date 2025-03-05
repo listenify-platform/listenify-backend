@@ -8,8 +8,8 @@ Listenify Backend is a Go-based API that powers the Listenify music streaming ap
 
 ## Prerequisites
 
-- Go 1.16 or higher
-- PostgreSQL (for user and music metadata)
+- Go 1.24 or higher
+- MongoDB (for user and music metadata)
 - Redis (optional, for caching)
 
 ## Installation

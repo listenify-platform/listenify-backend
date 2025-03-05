@@ -16,7 +16,7 @@ Listenify Backend is a Go-based API that powers the Listenify music streaming ap
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/listenify-backend.git
+git clone https://github.com/listenify-platform/listenify-backend.git
 cd listenify-backend
 ```
 

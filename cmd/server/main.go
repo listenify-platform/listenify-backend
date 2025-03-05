@@ -196,6 +196,7 @@ func main() {
 		*sessionMgr,
 		userManager,
 		playlistManager,
+		roomManager,
 		mediaResolver,
 		healthService,
 		cfg,

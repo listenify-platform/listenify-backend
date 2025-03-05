@@ -11,6 +11,7 @@ import (
 	"norelock.dev/listenify/backend/internal/db/redis/managers"
 	"norelock.dev/listenify/backend/internal/services/media"
 	"norelock.dev/listenify/backend/internal/services/playlist"
+	"norelock.dev/listenify/backend/internal/services/room"
 	"norelock.dev/listenify/backend/internal/services/system"
 	"norelock.dev/listenify/backend/internal/services/user"
 	"norelock.dev/listenify/backend/internal/utils"
@@ -28,6 +29,7 @@ func NewRouter(
 	sessionMgr managers.SessionManager,
 	userManager *user.Manager,
 	playlistManager *playlist.Manager,
+	roomManager *room.Manager,
 	mediaResolver *media.Resolver,
 	healthService *system.HealthService,
 	cfg *config.Config,
@@ -47,6 +49,7 @@ func NewRouter(
 	userHandler := handlers.NewUserHandler(userManager, apiLogger)
 	mediaHandler := handlers.NewMediaHandler(mediaResolver, apiLogger)
 	playlistHandler := handlers.NewPlaylistHandler(playlistManager, apiLogger)
+	roomHandler := handlers.NewRoomHandler(roomManager, apiLogger)
 	healthHandler := handlers.NewHealthHandler(apiLogger, healthService, cfg)
 
 	// Apply global middleware
@@ -110,6 +113,27 @@ func NewRouter(
 			r.Post("/{id}/items", playlistHandler.AddPlaylistItem)
 			r.Delete("/{id}/items/{itemId}", playlistHandler.RemovePlaylistItem)
 			r.Post("/import", playlistHandler.ImportPlaylist)
+		})
+
+		// Room routes
+		r.Route("/rooms", func(r chi.Router) {
+			r.Get("/", roomHandler.List)
+			r.Post("/", roomHandler.Create)
+			r.Get("/popular", roomHandler.ListPopular)
+			r.Get("/favorites", roomHandler.ListFavorites)
+			r.Get("/search", roomHandler.Search)
+			r.Get("/{id}", roomHandler.Get)
+			r.Get("/{id}/state", roomHandler.GetState)
+			r.Put("/{id}", roomHandler.Update)
+			r.Delete("/{id}", roomHandler.Delete)
+			r.Post("/{id}/join", roomHandler.PostJoin)
+			r.Post("/{id}/leave", roomHandler.PostLeave)
+			r.Post("/{id}/skip", roomHandler.PostSkip)
+			r.Post("/{id}/vote", roomHandler.PostVote)
+			r.Post("/{id}/queue/join", roomHandler.PostQueueJoin)
+			r.Post("/{id}/queue/leave", roomHandler.PostQueueLeave)
+			r.Post("/{id}/favorite", roomHandler.PostFavorite)
+			r.Delete("/{id}/favorite", roomHandler.DeleteFavorite)
 		})
 	})
 

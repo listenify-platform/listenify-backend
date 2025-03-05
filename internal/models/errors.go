@@ -245,8 +245,8 @@ type ValidationErrorResponse struct {
 	// Success is always false for error responses
 	Success bool `json:"success"`
 
-	// Error contains information about the validation error
-	Error struct {
+	// ErrorInner contains information about the validation error
+	ErrorInner struct {
 		// Code is the HTTP status code
 		Code int `json:"code"`
 
@@ -258,15 +258,19 @@ type ValidationErrorResponse struct {
 	} `json:"error"`
 }
 
+func (v *ValidationErrorResponse) Error() string {
+	return v.ErrorInner.Message
+}
+
 // NewValidationErrorResponse creates a new ValidationErrorResponse
 func NewValidationErrorResponse(fieldErrors map[string]string) ValidationErrorResponse {
 	response := ValidationErrorResponse{
 		Success: false,
 	}
 
-	response.Error.Code = http.StatusUnprocessableEntity
-	response.Error.Message = "Validation failed"
-	response.Error.Fields = fieldErrors
+	response.ErrorInner.Code = http.StatusUnprocessableEntity
+	response.ErrorInner.Message = "Validation failed"
+	response.ErrorInner.Fields = fieldErrors
 
 	return response
 }

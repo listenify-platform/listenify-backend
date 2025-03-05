@@ -1,0 +1,64 @@
+# Production environment configuration
+# This file overrides the values in app.yaml for the production environment
+
+# Server configuration
+server:
+  port: 8080
+  host: "0.0.0.0"
+  read_timeout: "30s"
+  write_timeout: "30s"
+  idle_timeout: "120s"
+  use_https: true
+  cert_file: "/etc/ssl/certs/listenify.pem"
+  key_file: "/etc/ssl/private/listenify.key"
+  trusted_proxies: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+
+# Database configuration
+database:
+  mongodb:
+    uri: "mongodb://mongodb:27017"  # Using service name for container environments
+    database: "listenify_prod"
+    max_pool_size: 200
+    min_pool_size: 20
+  redis:
+    addresses: ["redis:6379"]  # Using service name for container environments
+    max_retries: 5
+    pool_size: 200
+    min_idle_conns: 20
+
+# Logging configuration
+logging:
+  level: "info"
+  format: "json"
+  output_paths: ["stdout", "/var/log/listenify/app.log"]
+  error_output_paths: ["stderr", "/var/log/listenify/error.log"]
+
+# Room configuration for production
+room:
+  max_rooms: 500
+  max_users_per_room: 500
+  room_inactive_timeout: "12h"
+
+# WebSocket configuration for production
+websocket:
+  max_connections: 20000
+
+# Feature flags for production
+features:
+  enable_registration: true
+  enable_room_creation: true
+  enable_chat_commands: true
+  enable_avatars: true
+  enable_soundcloud: true
+  enable_profanity_filter: true
+
+# System monitoring for production
+system:
+  health_check_interval: "30s"
+  metrics_enabled: true
+  maintenance_interval: "1h"
+  temp_file_max_age: "24h"
+  log_max_age: "720h" # 30 days
+  history_max_age: "2160h" # 90 days
+  inactive_room_max_age: "336h" # 14 days
+  max_concurrent_maintenance_tasks: 5

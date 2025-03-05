@@ -1,0 +1,97 @@
+# Listenify Application Configuration
+
+# Server configuration
+server:
+  port: 8080
+  host: "0.0.0.0"
+  read_timeout: "15s"
+  write_timeout: "15s"
+  idle_timeout: "60s"
+  use_https: false
+  cert_file: ""
+  key_file: ""
+  trusted_proxies: []
+
+# Database configuration
+database:
+  mongodb:
+    uri: "mongodb+srv://administrator:m6wyYqjtg6XT4jBB@listenify.zyi5t.mongodb.net/?retryWrites=true&w=majority&appName=listenify"
+    database: "listenify"
+    timeout: "10s"
+    max_pool_size: 100
+    min_pool_size: 10
+    max_idle_time: "60s"
+  redis:
+    addresses: ["redis-19814.c250.eu-central-1-1.ec2.redns.redis-cloud.com:19814"]
+    username: "root"
+    password: "M73eBKqE6@TM3ZU"
+    database: 0
+    max_retries: 3
+    pool_size: 100
+    min_idle_conns: 10
+    dial_timeout: "5s"
+    read_timeout: "3s"
+    write_timeout: "3s"
+    idle_timeout: "300s"
+
+# Authentication configuration
+auth:
+  jwt_secret: "funny" # Must be set in environment or secrets file
+  access_token_expiry: "720h"
+  refresh_token_expiry: "168h"
+  password_min_length: 8
+  password_max_length: 72
+  password_reset_expiry: "1h"
+  allowed_origins: ["*"]
+
+# Media configuration
+media:
+  youtube_api_key: "" # Must be set in environment or secrets file
+  soundcloud_api_key: "" # Must be set in environment or secrets file
+  allowed_sources: ["youtube"]
+  max_duration: 600 # 10 minutes
+  cache_expiry: "24h"
+
+# Room configuration
+room:
+  max_rooms: 100
+  max_users_per_room: 200
+  max_dj_queue_size: 50
+  room_inactive_timeout: "6h"
+  default_room_theme: "default"
+  available_themes: ["default", "dark", "light", "neon", "vintage"]
+
+# WebSocket configuration
+websocket:
+  max_message_size: 4096
+  write_wait: "10s"
+  pong_wait: "60s"
+  ping_period: "54s"
+  max_connections: 10000
+
+# Logging configuration
+logging:
+  level: "debug"
+  format: "json"
+  output_paths: ["stdout"]
+  error_output_paths: ["stderr"]
+
+# Feature flags
+features:
+  enable_registration: true
+  enable_room_creation: true
+  enable_chat_commands: true
+  enable_avatars: true
+  enable_soundcloud: false
+  enable_profanity_filter: true
+
+# System monitoring
+system:
+  health_check_interval: "30s"
+  metrics_enabled: true
+  maintenance_interval: "1h"
+  temp_file_max_age: "24h"
+  log_max_age: "168h" # 7 days
+  history_max_age: "720h" # 30 days
+  inactive_room_max_age: "168h" # 7 days
+  max_concurrent_maintenance_tasks: 3

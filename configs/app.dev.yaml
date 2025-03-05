@@ -1,0 +1,38 @@
+# Development environment configuration
+# This file overrides the values in app.yaml for the development environment
+
+# Server configuration
+server:
+  port: 8080
+  host: "localhost"
+  use_https: false
+
+# Database configuration
+database:
+  mongodb:
+    uri: "mongodb://localhost:27017"
+    database: "listenify_dev"
+  redis:
+    addresses: ["localhost:6379"]
+    database: 1
+
+# Logging configuration
+logging:
+  level: "debug"
+  format: "console"
+  output_paths: ["stdout"]
+  error_output_paths: ["stderr"]
+
+# Feature flags for development
+features:
+  enable_registration: true
+  enable_room_creation: true
+  enable_chat_commands: true
+  enable_profanity_filter: false # Disabled for development to simplify testing
+
+# System monitoring for development
+system:
+  health_check_interval: "10s"
+  metrics_enabled: true
+  maintenance_interval: "30m"
+  temp_file_max_age: "1h"

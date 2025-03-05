@@ -2,6 +2,8 @@
 
 Backend service for the Listenify music streaming platform, written in Go.
 
+**IMPORTANT:** DO NOT PUSH DIRECTLY TO MAIN! Use the other branch or create one.
+
 ## Description
 
 Listenify Backend is a Go-based API that powers the Listenify music streaming application. It provides endpoints for user authentication, music streaming, playlist management, and other features required for a music streaming service.

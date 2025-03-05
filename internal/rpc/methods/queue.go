@@ -46,13 +46,8 @@ func (h *QueueHandler) RegisterMethods(hr rpc.HandlerRegistry) {
 	rpc.Register(hr, "queue.getHistory", h.GetPlayHistory)
 }
 
-// JoinQueueParams represents the parameters for the JoinQueue method.
-type JoinQueueParams struct {
-	RoomID string `json:"roomId"`
-}
-
 // JoinQueue adds the current user to the DJ queue.
-func (h *QueueHandler) JoinQueue(ctx context.Context, client *rpc.Client, p *JoinQueueParams) (any, error) {
+func (h *QueueHandler) JoinQueue(ctx context.Context, client *rpc.Client, p *RoomIDParam) (any, error) {
 	// Validate parameters
 	if p.RoomID == "" {
 		return nil, rpc.NewError(rpc.ErrInvalidParams, "roomId is required", nil)
@@ -79,13 +74,8 @@ func (h *QueueHandler) JoinQueue(ctx context.Context, client *rpc.Client, p *Joi
 	return roomState, nil
 }
 
-// LeaveQueueParams represents the parameters for the LeaveQueue method.
-type LeaveQueueParams struct {
-	RoomID string `json:"roomId"`
-}
-
 // LeaveQueue removes the current user from the DJ queue.
-func (h *QueueHandler) LeaveQueue(ctx context.Context, client *rpc.Client, p *LeaveQueueParams) (any, error) {
+func (h *QueueHandler) LeaveQueue(ctx context.Context, client *rpc.Client, p *RoomIDParam) (any, error) {
 	// Validate parameters
 	if p.RoomID == "" {
 		return nil, rpc.NewError(rpc.ErrInvalidParams, "roomId is required", nil)
@@ -153,13 +143,8 @@ func (h *QueueHandler) MoveInQueue(ctx context.Context, client *rpc.Client, p *M
 	return roomState, nil
 }
 
-// GetQueueParams represents the parameters for the GetQueue method.
-type GetQueueParams struct {
-	RoomID string `json:"roomId"`
-}
-
 // GetQueue gets the current DJ queue for a room.
-func (h *QueueHandler) GetQueue(ctx context.Context, client *rpc.Client, p *GetQueueParams) (any, error) {
+func (h *QueueHandler) GetQueue(ctx context.Context, client *rpc.Client, p *RoomIDParam) (any, error) {
 	// Validate parameters
 	if p.RoomID == "" {
 		return nil, rpc.NewError(rpc.ErrInvalidParams, "roomId is required", nil)
@@ -181,13 +166,8 @@ func (h *QueueHandler) GetQueue(ctx context.Context, client *rpc.Client, p *GetQ
 	return queue, nil
 }
 
-// GetCurrentDJParams represents the parameters for the GetCurrentDJ method.
-type GetCurrentDJParams struct {
-	RoomID string `json:"roomId"`
-}
-
 // GetCurrentDJ gets the current DJ for a room.
-func (h *QueueHandler) GetCurrentDJ(ctx context.Context, client *rpc.Client, p *GetCurrentDJParams) (any, error) {
+func (h *QueueHandler) GetCurrentDJ(ctx context.Context, client *rpc.Client, p *RoomIDParam) (any, error) {
 	// Validate parameters
 	if p.RoomID == "" {
 		return nil, rpc.NewError(rpc.ErrInvalidParams, "roomId is required", nil)
@@ -209,13 +189,8 @@ func (h *QueueHandler) GetCurrentDJ(ctx context.Context, client *rpc.Client, p *
 	return dj, nil
 }
 
-// GetCurrentMediaParams represents the parameters for the GetCurrentMedia method.
-type GetCurrentMediaParams struct {
-	RoomID string `json:"roomId"`
-}
-
 // GetCurrentMedia gets the currently playing media for a room.
-func (h *QueueHandler) GetCurrentMedia(ctx context.Context, client *rpc.Client, p *GetCurrentMediaParams) (any, error) {
+func (h *QueueHandler) GetCurrentMedia(ctx context.Context, client *rpc.Client, p *RoomIDParam) (any, error) {
 	// Validate parameters
 	if p.RoomID == "" {
 		return nil, rpc.NewError(rpc.ErrInvalidParams, "roomId is required", nil)
@@ -237,13 +212,8 @@ func (h *QueueHandler) GetCurrentMedia(ctx context.Context, client *rpc.Client, 
 	return media, nil
 }
 
-// AdvanceQueueParams represents the parameters for the AdvanceQueue method.
-type AdvanceQueueParams struct {
-	RoomID string `json:"roomId"`
-}
-
 // AdvanceQueue advances to the next DJ in the queue.
-func (h *QueueHandler) AdvanceQueue(ctx context.Context, client *rpc.Client, p *AdvanceQueueParams) (any, error) {
+func (h *QueueHandler) AdvanceQueue(ctx context.Context, client *rpc.Client, p *RoomIDParam) (any, error) {
 	// Validate parameters
 	if p.RoomID == "" {
 		return nil, rpc.NewError(rpc.ErrInvalidParams, "roomId is required", nil)
@@ -310,13 +280,8 @@ func (h *QueueHandler) PlayMedia(ctx context.Context, client *rpc.Client, p *Pla
 	return roomState, nil
 }
 
-// SkipCurrentMediaParams represents the parameters for the SkipCurrentMedia method.
-type SkipCurrentMediaParams struct {
-	RoomID string `json:"roomId"`
-}
-
 // SkipCurrentMedia skips the currently playing media.
-func (h *QueueHandler) SkipCurrentMedia(ctx context.Context, client *rpc.Client, p *SkipCurrentMediaParams) (any, error) {
+func (h *QueueHandler) SkipCurrentMedia(ctx context.Context, client *rpc.Client, p *RoomIDParam) (any, error) {
 	// Validate parameters
 	if p.RoomID == "" {
 		return nil, rpc.NewError(rpc.ErrInvalidParams, "roomId is required", nil)
@@ -338,13 +303,8 @@ func (h *QueueHandler) SkipCurrentMedia(ctx context.Context, client *rpc.Client,
 	return roomState, nil
 }
 
-// ClearQueueParams represents the parameters for the ClearQueue method.
-type ClearQueueParams struct {
-	RoomID string `json:"roomId"`
-}
-
 // ClearQueue clears the DJ queue for a room.
-func (h *QueueHandler) ClearQueue(ctx context.Context, client *rpc.Client, p *ClearQueueParams) (any, error) {
+func (h *QueueHandler) ClearQueue(ctx context.Context, client *rpc.Client, p *RoomIDParam) (any, error) {
 	// Validate parameters
 	if p.RoomID == "" {
 		return nil, rpc.NewError(rpc.ErrInvalidParams, "roomId is required", nil)
@@ -366,13 +326,8 @@ func (h *QueueHandler) ClearQueue(ctx context.Context, client *rpc.Client, p *Cl
 	return roomState, nil
 }
 
-// ShuffleQueueParams represents the parameters for the ShuffleQueue method.
-type ShuffleQueueParams struct {
-	RoomID string `json:"roomId"`
-}
-
 // ShuffleQueue randomly shuffles the DJ queue for a room.
-func (h *QueueHandler) ShuffleQueue(ctx context.Context, client *rpc.Client, p *ShuffleQueueParams) (any, error) {
+func (h *QueueHandler) ShuffleQueue(ctx context.Context, client *rpc.Client, p *RoomIDParam) (any, error) {
 	// Validate parameters
 	if p.RoomID == "" {
 		return nil, rpc.NewError(rpc.ErrInvalidParams, "roomId is required", nil)
@@ -508,13 +463,8 @@ func (h *QueueHandler) IsUserCurrentDJ(ctx context.Context, client *rpc.Client, 
 	return isCurrentDJ, nil
 }
 
-// GetPlayHistoryParams represents the parameters for the GetPlayHistory method.
-type GetPlayHistoryParams struct {
-	RoomID string `json:"roomId"`
-}
-
 // GetPlayHistory gets the play history for a room.
-func (h *QueueHandler) GetPlayHistory(ctx context.Context, client *rpc.Client, p *GetPlayHistoryParams) (any, error) {
+func (h *QueueHandler) GetPlayHistory(ctx context.Context, client *rpc.Client, p *RoomIDParam) (any, error) {
 	// Validate parameters
 	if p.RoomID == "" {
 		return nil, rpc.NewError(rpc.ErrInvalidParams, "roomId is required", nil)

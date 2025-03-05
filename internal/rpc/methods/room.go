@@ -99,13 +99,8 @@ func (h *RoomHandler) CreateRoom(ctx context.Context, client *rpc.Client, p *Cre
 	return createdRoom, nil
 }
 
-// GetRoomParams represents the parameters for the GetRoom method.
-type GetRoomParams struct {
-	RoomID string `json:"roomId"`
-}
-
 // GetRoom gets a room by ID.
-func (h *RoomHandler) GetRoom(ctx context.Context, client *rpc.Client, p *GetRoomParams) (any, error) {
+func (h *RoomHandler) GetRoom(ctx context.Context, client *rpc.Client, p *RoomIDParam) (any, error) {
 	// Validate parameters
 	if p.RoomID == "" {
 		return nil, rpc.NewError(rpc.ErrInvalidParams, "roomId is required", nil)
@@ -219,13 +214,8 @@ func (h *RoomHandler) UpdateRoom(ctx context.Context, client *rpc.Client, p *Upd
 	return updatedRoom, nil
 }
 
-// DeleteRoomParams represents the parameters for the DeleteRoom method.
-type DeleteRoomParams struct {
-	RoomID string `json:"roomId"`
-}
-
 // DeleteRoom deletes a room.
-func (h *RoomHandler) DeleteRoom(ctx context.Context, client *rpc.Client, p *DeleteRoomParams) (any, error) {
+func (h *RoomHandler) DeleteRoom(ctx context.Context, client *rpc.Client, p *RoomIDParam) (any, error) {
 	// Validate parameters
 	if p.RoomID == "" {
 		return nil, rpc.NewError(rpc.ErrInvalidParams, "roomId is required", nil)
@@ -267,13 +257,8 @@ func (h *RoomHandler) DeleteRoom(ctx context.Context, client *rpc.Client, p *Del
 	return true, nil
 }
 
-// JoinRoomParams represents the parameters for the JoinRoom method.
-type JoinRoomParams struct {
-	RoomID string `json:"roomId"`
-}
-
 // JoinRoom joins a room.
-func (h *RoomHandler) JoinRoom(ctx context.Context, client *rpc.Client, p *JoinRoomParams) (any, error) {
+func (h *RoomHandler) JoinRoom(ctx context.Context, client *rpc.Client, p *RoomIDParam) (any, error) {
 	// Validate parameters
 	if p.RoomID == "" {
 		return nil, rpc.NewError(rpc.ErrInvalidParams, "roomId is required", nil)
@@ -319,13 +304,8 @@ func (h *RoomHandler) JoinRoom(ctx context.Context, client *rpc.Client, p *JoinR
 	return state, nil
 }
 
-// LeaveRoomParams represents the parameters for the LeaveRoom method.
-type LeaveRoomParams struct {
-	RoomID string `json:"roomId"`
-}
-
 // LeaveRoom leaves a room.
-func (h *RoomHandler) LeaveRoom(ctx context.Context, client *rpc.Client, p *LeaveRoomParams) (any, error) {
+func (h *RoomHandler) LeaveRoom(ctx context.Context, client *rpc.Client, p *RoomIDParam) (any, error) {
 	// Validate parameters
 	if p.RoomID == "" {
 		return nil, rpc.NewError(rpc.ErrInvalidParams, "roomId is required", nil)
@@ -355,13 +335,8 @@ func (h *RoomHandler) LeaveRoom(ctx context.Context, client *rpc.Client, p *Leav
 	return true, nil
 }
 
-// GetRoomUsersParams represents the parameters for the GetRoomUsers method.
-type GetRoomUsersParams struct {
-	RoomID string `json:"roomId"`
-}
-
 // GetRoomUsers gets all users in a room.
-func (h *RoomHandler) GetRoomUsers(ctx context.Context, client *rpc.Client, p *GetRoomUsersParams) (any, error) {
+func (h *RoomHandler) GetRoomUsers(ctx context.Context, client *rpc.Client, p *RoomIDParam) (any, error) {
 	// Validate parameters
 	if p.RoomID == "" {
 		return nil, rpc.NewError(rpc.ErrInvalidParams, "roomId is required", nil)
@@ -426,13 +401,8 @@ func (h *RoomHandler) IsUserInRoom(ctx context.Context, client *rpc.Client, p *I
 	return inRoom, nil
 }
 
-// GetRoomStateParams represents the parameters for the GetRoomState method.
-type GetRoomStateParams struct {
-	RoomID string `json:"roomId"`
-}
-
 // GetRoomState gets the current state of a room.
-func (h *RoomHandler) GetRoomState(ctx context.Context, client *rpc.Client, p *GetRoomStateParams) (any, error) {
+func (h *RoomHandler) GetRoomState(ctx context.Context, client *rpc.Client, p *RoomIDParam) (any, error) {
 	// Validate parameters
 	if p.RoomID == "" {
 		return nil, rpc.NewError(rpc.ErrInvalidParams, "roomId is required", nil)

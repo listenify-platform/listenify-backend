@@ -117,15 +117,11 @@ func NewRouter(
 
 		// Room routes
 		r.Route("/rooms", func(r chi.Router) {
-			r.Get("/", roomHandler.List)
-			r.Post("/", roomHandler.Create)
+			AddCRUDRoutes(r, roomHandler)
 			r.Get("/popular", roomHandler.ListPopular)
 			r.Get("/favorites", roomHandler.ListFavorites)
 			r.Get("/search", roomHandler.Search)
-			r.Get("/{id}", roomHandler.Get)
 			r.Get("/{id}/state", roomHandler.GetState)
-			r.Put("/{id}", roomHandler.Update)
-			r.Delete("/{id}", roomHandler.Delete)
 			r.Post("/{id}/join", roomHandler.PostJoin)
 			r.Post("/{id}/leave", roomHandler.PostLeave)
 			r.Post("/{id}/skip", roomHandler.PostSkip)

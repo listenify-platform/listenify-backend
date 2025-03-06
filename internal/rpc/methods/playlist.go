@@ -188,18 +188,13 @@ func (h *PlaylistHandler) GetPlaylist(ctx context.Context, client *rpc.Client, p
 	}, nil
 }
 
-// GetUserPlaylistsParams represents the parameters for the getUserPlaylists method.
-type GetUserPlaylistsParams struct {
-	UserID string `json:"userId,omitempty"`
-}
-
 // GetUserPlaylistsResult represents the result of the getUserPlaylists method.
 type GetUserPlaylistsResult struct {
 	Playlists []models.PlaylistInfo `json:"playlists"`
 }
 
 // GetUserPlaylists handles retrieving a user's playlists.
-func (h *PlaylistHandler) GetUserPlaylists(ctx context.Context, client *rpc.Client, p *GetUserPlaylistsParams) (any, error) {
+func (h *PlaylistHandler) GetUserPlaylists(ctx context.Context, client *rpc.Client, p *UserIDParam) (any, error) {
 	// If no user ID is provided, use the authenticated user's ID
 	userID := p.UserID
 	if userID == "" {

@@ -46,13 +46,8 @@ func (h *UserHandler) RegisterMethods(hr rpc.HandlerRegistry) {
 	rpc.Register(hr, "user.getExperienceProgress", h.GetExperienceProgress)
 }
 
-// GetUserStatsParams represents the parameters for the getUserStats method.
-type GetUserStatsParams struct {
-	UserID string `json:"userId,omitempty"`
-}
-
 // GetUserStats handles retrieving a user's statistics.
-func (h *UserHandler) GetUserStats(ctx context.Context, client *rpc.Client, p *GetUserStatsParams) (any, error) {
+func (h *UserHandler) GetUserStats(ctx context.Context, client *rpc.Client, p *UserIDParam) (any, error) {
 	// If no user ID is provided, use the authenticated user's ID
 	userID := p.UserID
 	if userID == "" {
@@ -159,13 +154,8 @@ func (h *UserHandler) GetTopUsers(ctx context.Context, client *rpc.Client, p *Ge
 	}, nil
 }
 
-// GetUserRankParams represents the parameters for the getUserRank method.
-type GetUserRankParams struct {
-	UserID string `json:"userId,omitempty"`
-}
-
 // GetUserRank handles retrieving a user's rank based on experience points.
-func (h *UserHandler) GetUserRank(ctx context.Context, client *rpc.Client, p *GetUserRankParams) (any, error) {
+func (h *UserHandler) GetUserRank(ctx context.Context, client *rpc.Client, p *UserIDParam) (any, error) {
 	// If no user ID is provided, use the authenticated user's ID
 	userID := p.UserID
 	if userID == "" {
@@ -202,13 +192,8 @@ func (h *UserHandler) GetUserRank(ctx context.Context, client *rpc.Client, p *Ge
 	}, nil
 }
 
-// GetExperienceProgressParams represents the parameters for the getExperienceProgress method.
-type GetExperienceProgressParams struct {
-	UserID string `json:"userId,omitempty"`
-}
-
 // GetExperienceProgress handles retrieving a user's progress towards the next level.
-func (h *UserHandler) GetExperienceProgress(ctx context.Context, client *rpc.Client, p *GetExperienceProgressParams) (any, error) {
+func (h *UserHandler) GetExperienceProgress(ctx context.Context, client *rpc.Client, p *UserIDParam) (any, error) {
 	// If no user ID is provided, use the authenticated user's ID
 	userID := p.UserID
 	if userID == "" {
@@ -420,13 +405,8 @@ func (h *UserHandler) Logout(ctx context.Context, client *rpc.Client) (any, erro
 	}, nil
 }
 
-// GetProfileParams represents the parameters for the getProfile method.
-type GetProfileParams struct {
-	UserID string `json:"userId,omitempty"`
-}
-
 // GetProfile handles retrieving a user's profile.
-func (h *UserHandler) GetProfile(ctx context.Context, client *rpc.Client, p *GetProfileParams) (any, error) {
+func (h *UserHandler) GetProfile(ctx context.Context, client *rpc.Client, p *UserIDParam) (any, error) {
 	// If no user ID is provided, use the authenticated user's ID
 	userID := p.UserID
 	if userID == "" {

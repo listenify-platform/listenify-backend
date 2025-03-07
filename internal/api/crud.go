@@ -23,10 +23,10 @@ type CRUD[C any, U any] interface {
 // It maps the HTTP methods to the corresponding handler methods defined in the CRUD interface.
 func AddCRUDRoutes[C any, U any](r chi.Router, handler CRUD[C, U]) {
 	r.Get("/", handler.List)
-	MethodWithID(r, "GET", "/{id}", handler.Get)
-	MethodWithBody(r, "POST", "/", handler.Create)
-	MethodWithIDAndBody(r, "PUT", "/{id}", handler.Update)
-	MethodWithID(r, "DELETE", "/{id}", handler.Delete)
+	r.Get("/{id}", WithID(handler.Get))
+	r.Post("/", WithBody(handler.Create))
+	r.Put("/{id}", WithIDAndBody(handler.Update))
+	r.Delete("/{id}", WithID(handler.Delete))
 }
 
 type HandlerFunc1[T any] func(w http.ResponseWriter, r *http.Request, data T)
@@ -46,29 +46,29 @@ func idFromParam(w http.ResponseWriter, r *http.Request) bson.ObjectID {
 	return oid
 }
 
-func MethodWithID(r chi.Router, method string, pattern string, handler HandlerFunc1[bson.ObjectID]) {
-	r.MethodFunc(method, pattern, func(w http.ResponseWriter, r *http.Request) {
+func WithID(handler HandlerFunc1[bson.ObjectID]) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		id := idFromParam(w, r)
 		if id.IsZero() {
 			return
 		}
 		handler(w, r, id)
-	})
+	}
 }
 
-func MethodWithBody[T any](r chi.Router, method string, pattern string, handler HandlerFunc1[*T]) {
-	r.MethodFunc(method, pattern, func(w http.ResponseWriter, r *http.Request) {
+func WithBody[T any](handler HandlerFunc1[*T]) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		var data T
 		if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
 			utils.RespondWithError(w, http.StatusBadRequest, "Invalid request body")
 			return
 		}
 		handler(w, r, &data)
-	})
+	}
 }
 
-func MethodWithIDAndBody[T any](r chi.Router, method string, pattern string, handler HandlerFunc2[bson.ObjectID, *T]) {
-	r.MethodFunc(method, pattern, func(w http.ResponseWriter, r *http.Request) {
+func WithIDAndBody[T any](handler HandlerFunc2[bson.ObjectID, *T]) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		id := idFromParam(w, r)
 		if id.IsZero() {
 			return
@@ -79,5 +79,5 @@ func MethodWithIDAndBody[T any](r chi.Router, method string, pattern string, han
 			return
 		}
 		handler(w, r, id, &data)
-	})
+	}
 }

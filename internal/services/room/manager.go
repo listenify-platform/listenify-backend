@@ -277,7 +277,7 @@ func (m *Manager) JoinRoom(ctx context.Context, roomID, userID bson.ObjectID) er
 
 	// Check if room is at capacity
 	if len(state.Users) >= room.Settings.Capacity {
-		return errors.New("room is at capacity")
+		return models.ErrRoomFull
 	}
 
 	// Check if user is banned

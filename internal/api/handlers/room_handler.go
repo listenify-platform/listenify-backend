@@ -24,11 +24,24 @@ func NewRoomHandler(mgr *room.Manager, logger *utils.Logger) *RoomHandler {
 }
 
 func (h *RoomHandler) List(w http.ResponseWriter, r *http.Request) {
-
 }
 
 func (h *RoomHandler) ListPopular(w http.ResponseWriter, r *http.Request) {
+	limit := GetLimit(r, 20)
 
+	rooms, err := h.mgr.GetPopularRooms(r.Context(), limit)
+	if err != nil {
+		h.logger.Error("Failed to get popular rooms", err)
+		utils.RespondWithError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	if len(rooms) == 0 {
+		utils.RespondWithError(w, http.StatusNotFound, "No popular rooms found")
+		return
+	}
+
+	utils.RespondWithJSON(w, http.StatusOK, rooms)
 }
 
 func (h *RoomHandler) ListFavorites(w http.ResponseWriter, r *http.Request) {
@@ -59,8 +72,23 @@ func (h *RoomHandler) Get(w http.ResponseWriter, r *http.Request, roomID bson.Ob
 	utils.RespondWithJSON(w, http.StatusOK, room)
 }
 
-func (h *RoomHandler) GetState(w http.ResponseWriter, r *http.Request) {
+func (h *RoomHandler) GetState(w http.ResponseWriter, r *http.Request, id bson.ObjectID) {
+	state, err := h.mgr.GetRoomState(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, models.ErrRoomNotFound) {
+			utils.RespondWithError(w, http.StatusNotFound, "Room not found")
+		} else {
+			h.logger.Error("Failed to get room state", err)
+			utils.RespondWithError(w, http.StatusInternalServerError, "Internal server error")
+		}
+		return
+	}
 
+	if state == nil {
+		utils.RespondWithError(w, http.StatusNotFound, "Room not found")
+		return
+	}
+	utils.RespondWithJSON(w, http.StatusOK, state)
 }
 
 type RoomCreateRequest struct {
@@ -203,34 +231,76 @@ func (h *RoomHandler) Delete(w http.ResponseWriter, r *http.Request, id bson.Obj
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *RoomHandler) PostJoin(w http.ResponseWriter, r *http.Request) {
+func (h *RoomHandler) PostJoin(w http.ResponseWriter, r *http.Request, id bson.ObjectID) {
+	userID := GetUserIDFromContext(w, r)
+	if userID.IsZero() {
+		return
+	}
+
+	err := h.mgr.JoinRoom(r.Context(), id, userID)
+	if err != nil {
+		if errors.Is(err, models.ErrRoomNotFound) {
+			utils.RespondWithError(w, http.StatusNotFound, "Room not found")
+		} else if errors.Is(err, models.ErrRoomFull) {
+			utils.RespondWithError(w, http.StatusConflict, "Room is full")
+		} else if errors.Is(err, models.ErrUserBanned) {
+			utils.RespondWithError(w, http.StatusForbidden, "You are banned from this room")
+		} else if errors.Is(err, models.ErrUserAlreadyInRoom) {
+			utils.RespondWithError(w, http.StatusConflict, "You are already in this room")
+		} else {
+			h.logger.Error("Failed to join room", err)
+			utils.RespondWithError(w, http.StatusInternalServerError, "Internal server error")
+		}
+		return
+	}
+
+	// Respond with success
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *RoomHandler) PostLeave(w http.ResponseWriter, r *http.Request, id bson.ObjectID) {
+	userID := GetUserIDFromContext(w, r)
+	if userID.IsZero() {
+		return
+	}
+
+	err := h.mgr.LeaveRoom(r.Context(), id, userID)
+	if err != nil {
+		if errors.Is(err, models.ErrRoomNotFound) {
+			utils.RespondWithError(w, http.StatusNotFound, "Room not found")
+		} else if errors.Is(err, models.ErrUserNotInRoom) {
+			utils.RespondWithError(w, http.StatusConflict, "You are not in this room")
+		} else {
+			h.logger.Error("Failed to leave room", err)
+			utils.RespondWithError(w, http.StatusInternalServerError, "Internal server error")
+		}
+		return
+	}
+
+	// Respond with success
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *RoomHandler) PostSkip(w http.ResponseWriter, r *http.Request, id bson.ObjectID) {
 
 }
 
-func (h *RoomHandler) PostLeave(w http.ResponseWriter, r *http.Request) {
+func (h *RoomHandler) PostVote(w http.ResponseWriter, r *http.Request, id bson.ObjectID) {
 
 }
 
-func (h *RoomHandler) PostSkip(w http.ResponseWriter, r *http.Request) {
+func (h *RoomHandler) PostQueueJoin(w http.ResponseWriter, r *http.Request, id bson.ObjectID) {
 
 }
 
-func (h *RoomHandler) PostVote(w http.ResponseWriter, r *http.Request) {
+func (h *RoomHandler) PostQueueLeave(w http.ResponseWriter, r *http.Request, id bson.ObjectID) {
 
 }
 
-func (h *RoomHandler) PostQueueJoin(w http.ResponseWriter, r *http.Request) {
+func (h *RoomHandler) PostFavorite(w http.ResponseWriter, r *http.Request, id bson.ObjectID) {
 
 }
 
-func (h *RoomHandler) PostQueueLeave(w http.ResponseWriter, r *http.Request) {
-
-}
-
-func (h *RoomHandler) PostFavorite(w http.ResponseWriter, r *http.Request) {
-
-}
-
-func (h *RoomHandler) DeleteFavorite(w http.ResponseWriter, r *http.Request) {
+func (h *RoomHandler) DeleteFavorite(w http.ResponseWriter, r *http.Request, id bson.ObjectID) {
 
 }

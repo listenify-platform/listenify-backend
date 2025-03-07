@@ -122,6 +122,7 @@ func NewRouter(
 			r.Get("/favorites", roomHandler.ListFavorites)
 			r.Get("/search", roomHandler.Search)
 			r.Get("/{id}/state", WithID(roomHandler.GetState))
+			r.Get("/{id}/user", WithID(roomHandler.HasUser))
 			r.Post("/{id}/join", WithID(roomHandler.PostJoin))
 			r.Post("/{id}/leave", WithID(roomHandler.PostLeave))
 			r.Post("/{id}/skip", WithID(roomHandler.PostSkip))

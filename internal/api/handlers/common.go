@@ -22,17 +22,37 @@ func GetUserIDFromContext(w http.ResponseWriter, r *http.Request) bson.ObjectID 
 	return oid
 }
 
-func GetLimit(r *http.Request, def int) int {
-	limit := r.URL.Query().Get("limit")
-	if limit == "" {
+func GetIDFromQuery(r *http.Request, param string) bson.ObjectID {
+	id := r.URL.Query().Get(param)
+	if id == "" {
+		return bson.NilObjectID
+	}
+	oid, err := bson.ObjectIDFromHex(id)
+	if err != nil {
+		return bson.NilObjectID
+	}
+	return oid
+}
+
+func GetQueryInt(r *http.Request, param string, def int) int {
+	value := r.URL.Query().Get(param)
+	if value == "" {
 		return def
 	}
 
-	num_limit, err := strconv.Atoi(limit)
+	num, err := strconv.Atoi(value)
 	if err != nil {
 		return def
 	}
 
-	num_limit = min(def, max(0, num_limit))
-	return num_limit
+	num = min(def, max(0, num))
+	return num
+}
+
+func GetLimit(r *http.Request, def int) int {
+	return GetQueryInt(r, "limit", def)
+}
+
+func GetPage(r *http.Request, def int) int {
+	return GetQueryInt(r, "page", def)
 }

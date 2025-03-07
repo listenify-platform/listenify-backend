@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strconv"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"norelock.dev/listenify/backend/internal/models"
@@ -24,6 +25,23 @@ func NewRoomHandler(mgr *room.Manager, logger *utils.Logger) *RoomHandler {
 }
 
 func (h *RoomHandler) List(w http.ResponseWriter, r *http.Request) {
+	limit := GetLimit(r, 20)
+	// page := GetPage(r, 1)
+
+	// Get only active rooms
+	rooms, err := h.mgr.GetActiveRooms(r.Context(), limit)
+	if err != nil {
+		h.logger.Error("Failed to get active rooms", err)
+		utils.RespondWithError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	if len(rooms) == 0 {
+		utils.RespondWithError(w, http.StatusNotFound, "No active rooms found")
+		return
+	}
+
+	utils.RespondWithJSON(w, http.StatusOK, rooms)
 }
 
 func (h *RoomHandler) ListPopular(w http.ResponseWriter, r *http.Request) {
@@ -49,7 +67,38 @@ func (h *RoomHandler) ListFavorites(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *RoomHandler) Search(w http.ResponseWriter, r *http.Request) {
+	limit := GetLimit(r, 20)
 
+	// Get query, skip, and sort parameters from the request
+	query := r.URL.Query().Get("query")
+	sort := r.URL.Query().Get("sort")
+	skip, err := strconv.Atoi(r.URL.Query().Get("skip"))
+	if err != nil {
+		skip = 0
+	}
+	skip = max(0, skip)
+
+	rooms, total, err := h.mgr.SearchRooms(r.Context(), models.RoomSearchCriteria{
+		Query:  query,
+		SortBy: sort,
+		Limit:  limit,
+		Page:   skip,
+	})
+	if err != nil {
+		h.logger.Error("Failed to search rooms", err)
+		utils.RespondWithError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	if len(rooms) == 0 {
+		utils.RespondWithError(w, http.StatusNotFound, "No rooms found")
+		return
+	}
+
+	utils.RespondWithJSON(w, http.StatusOK, map[string]any{
+		"rooms": rooms,
+		"total": total,
+	})
 }
 
 func (h *RoomHandler) Get(w http.ResponseWriter, r *http.Request, roomID bson.ObjectID) {
@@ -89,6 +138,32 @@ func (h *RoomHandler) GetState(w http.ResponseWriter, r *http.Request, id bson.O
 		return
 	}
 	utils.RespondWithJSON(w, http.StatusOK, state)
+}
+
+func (h *RoomHandler) HasUser(w http.ResponseWriter, r *http.Request, id bson.ObjectID) {
+	// The User ID can be either from the context or from the query
+	userID := GetIDFromQuery(r, "userId")
+	if userID.IsZero() {
+		userID = GetUserIDFromContext(w, r)
+		if userID.IsZero() {
+			return
+		}
+	}
+
+	inRoom, err := h.mgr.IsUserInRoom(r.Context(), id, userID)
+	if err != nil {
+		if errors.Is(err, models.ErrRoomNotFound) {
+			utils.RespondWithError(w, http.StatusNotFound, "Room not found")
+		} else {
+			h.logger.Error("Failed to check if user is in room", err)
+			utils.RespondWithError(w, http.StatusInternalServerError, "Internal server error")
+		}
+		return
+	}
+
+	utils.RespondWithJSON(w, http.StatusOK, map[string]any{
+		"inRoom": inRoom,
+	})
 }
 
 type RoomCreateRequest struct {

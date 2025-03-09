@@ -38,7 +38,7 @@ type Client struct {
 	logger *utils.Logger
 
 	// mutex protects concurrent access to client properties
-	mutex sync.Mutex
+	mutex sync.RWMutex
 
 	// closed indicates whether the send channel has been closed
 	closed bool
@@ -46,8 +46,8 @@ type Client struct {
 
 // safelySendMessage sends a message only if the channel isn't closed
 func (c *Client) safelySendMessage(message []byte) bool {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
 
 	if c.closed {
 		return false

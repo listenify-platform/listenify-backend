@@ -173,7 +173,7 @@ func (s *Server) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		Username: claims.Username,
 		server:   s,
 		conn:     conn,
-		send:     make(chan []byte, 256),
+		send:     make(chan []byte, 64),
 		rooms:    make(map[string]bool),
 		logger:   s.logger.Named("client"),
 	}

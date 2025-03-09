@@ -244,26 +244,31 @@ func (h *Hub) removeClientFromRoom(client *Client, room string) {
 
 // Broadcast sends a message to all connected clients.
 func (h *Hub) Broadcast(message []byte) {
+	h.logger.Debug("Broadcasting message to all clients")
 	h.broadcast <- message
 }
 
 // BroadcastToRoom sends a message to all clients in a room.
 func (h *Hub) BroadcastToRoom(room string, message []byte) {
+	h.logger.Debug("Broadcasting to room", "room", room)
 	h.roomBroadcast <- &roomMessage{room: room, message: message}
 }
 
 // BroadcastToUser sends a message to all clients of a user.
 func (h *Hub) BroadcastToUser(userID string, message []byte) {
+	h.logger.Debug("Broadcasting to user", "userID", userID)
 	h.userBroadcast <- &userMessage{userID: userID, message: message}
 }
 
 // AddClientToRoom adds a client to a room.
 func (h *Hub) AddClientToRoom(client *Client, room string) {
+	h.logger.Debug("Adding client to room", "clientID", client.ID, "room", room)
 	h.join <- &roomOperation{client: client, room: room}
 }
 
 // RemoveClientFromRoom removes a client from a room.
 func (h *Hub) RemoveClientFromRoom(client *Client, room string) {
+	h.logger.Debug("Removing client from room", "clientID", client.ID, "room", room)
 	h.leave <- &roomOperation{client: client, room: room}
 }
 

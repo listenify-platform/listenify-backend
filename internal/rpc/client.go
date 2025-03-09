@@ -50,6 +50,7 @@ func (c *Client) safelySendMessage(message []byte) bool {
 	defer c.mutex.RUnlock()
 
 	if c.closed {
+		c.logger.Debug("Client send channel is closed", "clientID", c.ID)
 		return false
 	}
 

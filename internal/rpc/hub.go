@@ -130,6 +130,7 @@ func (h *Hub) registerClient(client *Client) {
 
 // unregisterClient unregisters a client from the hub.
 func (h *Hub) unregisterClient(client *Client) {
+	h.logger.Debug("Unregistering client", "clientID", client.ID, "userID", client.UserID)
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
 
@@ -209,8 +210,8 @@ func (h *Hub) broadcastToUser(userID string, message []byte) {
 
 // addClientToRoom adds a client to a room.
 func (h *Hub) addClientToRoom(client *Client, room string) {
+	h.logger.Debug("Adding client to room", "clientID", client.ID, "userID", client.UserID, "room", room)
 	h.mutex.Lock()
-	defer h.mutex.Unlock()
 
 	// Create room if it doesn't exist
 	if _, ok := h.rooms[room]; !ok {
@@ -223,13 +224,15 @@ func (h *Hub) addClientToRoom(client *Client, room string) {
 	// Update client's rooms
 	client.rooms[room] = true
 
+	h.mutex.Unlock()
+
 	h.logger.Debug("Client added to room", "id", client.ID, "userID", client.UserID, "room", room)
 }
 
 // removeClientFromRoom removes a client from a room.
 func (h *Hub) removeClientFromRoom(client *Client, room string) {
+	h.logger.Debug("Removing client from room", "clientID", client.ID, "userID", client.UserID, "room", room)
 	h.mutex.Lock()
-	defer h.mutex.Unlock()
 
 	// Remove client from room
 	if clients, ok := h.rooms[room]; ok {
@@ -241,6 +244,8 @@ func (h *Hub) removeClientFromRoom(client *Client, room string) {
 
 	// Update client's rooms
 	delete(client.rooms, room)
+
+	h.mutex.Unlock()
 
 	h.logger.Debug("Client removed from room", "id", client.ID, "userID", client.UserID, "room", room)
 }

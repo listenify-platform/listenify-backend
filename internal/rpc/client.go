@@ -268,12 +268,12 @@ func (c *Client) JoinRoom(roomID string, method string, params any) {
 // LeaveRoom removes the client from a room.
 func (c *Client) LeaveRoom(roomID string, method string, params any) {
 	delete(c.rooms, roomID)
-	c.server.RemoveClientFromRoom(c, roomID)
 	c.sendRoomMsg(roomID, &Notification{
 		JSONRPC: "2.0",
 		Method:  method,
 		Params:  params,
 	})
+	c.server.RemoveClientFromRoom(c, roomID)
 	c.logger.Debug("Client left room", "clientID", c.ID, "roomID", roomID)
 }
 

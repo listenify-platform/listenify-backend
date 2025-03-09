@@ -171,6 +171,7 @@ func (h *Hub) broadcastMessage(message []byte) {
 		if !client.safelySendMessage(message) {
 			h.unregisterClient(client)
 		}
+		h.logger.Debug("Sent to client", "clientID", client.ID)
 	}
 }
 
@@ -185,6 +186,7 @@ func (h *Hub) broadcastToRoom(room string, message []byte) {
 			if !client.safelySendMessage(message) {
 				h.unregisterClient(client)
 			}
+			h.logger.Debug("Sent to client in room", "clientID", client.ID, "room", room)
 		}
 	}
 }
@@ -200,6 +202,7 @@ func (h *Hub) broadcastToUser(userID string, message []byte) {
 			if !client.safelySendMessage(message) {
 				h.unregisterClient(client)
 			}
+			h.logger.Debug("Sent to client of user", "clientID", client.ID, "userID", userID)
 		}
 	}
 }

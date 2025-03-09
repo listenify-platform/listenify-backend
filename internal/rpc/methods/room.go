@@ -11,19 +11,22 @@ import (
 	"norelock.dev/listenify/backend/internal/models"
 	"norelock.dev/listenify/backend/internal/rpc"
 	"norelock.dev/listenify/backend/internal/services/room"
+	"norelock.dev/listenify/backend/internal/services/user"
 	"norelock.dev/listenify/backend/internal/utils"
 )
 
 // RoomHandler handles room-related RPC methods.
 type RoomHandler struct {
 	roomManager room.RoomManager
+	userMgr     *user.Manager
 	logger      *utils.Logger
 }
 
 // NewRoomHandler creates a new RoomHandler.
-func NewRoomHandler(roomManager room.RoomManager, logger *utils.Logger) *RoomHandler {
+func NewRoomHandler(roomManager room.RoomManager, userMgr *user.Manager, logger *utils.Logger) *RoomHandler {
 	return &RoomHandler{
 		roomManager: roomManager,
+		userMgr:     userMgr,
 		logger:      logger,
 	}
 }
@@ -294,6 +297,21 @@ func (h *RoomHandler) JoinRoom(ctx context.Context, client *rpc.Client, p *RoomI
 		return nil, rpc.NewError(rpc.ErrInternalError, err.Error(), nil)
 	}
 
+	user, err := h.userMgr.GetPublicUserByID(ctx, client.UserID)
+	if err != nil {
+		h.logger.Error("Failed to get user", err, "userId", client.UserID)
+		return nil, rpc.NewError(rpc.ErrInternalError, err.Error(), nil)
+	}
+	if user == nil {
+		h.logger.Error("User not found", nil, "userId", client.UserID)
+		return nil, rpc.NewError(rpc.ErrNotAuthorized, "user not found", nil)
+	}
+
+	client.JoinRoom(p.RoomID, "room:user_join", map[string]any{
+		"roomId": p.RoomID,
+		"user":   user,
+	})
+
 	// Get room state
 	state, err := h.roomManager.GetRoomState(ctx, roomID)
 	if err != nil {
@@ -331,6 +349,11 @@ func (h *RoomHandler) LeaveRoom(ctx context.Context, client *rpc.Client, p *Room
 		h.logger.Error("Failed to leave room", err, "roomId", p.RoomID, "userId", client.UserID)
 		return nil, rpc.NewError(rpc.ErrInternalError, err.Error(), nil)
 	}
+
+	client.LeaveRoom(p.RoomID, "room:user_leave", map[string]any{
+		"roomId": p.RoomID,
+		"userId": client.UserID,
+	})
 
 	return true, nil
 }

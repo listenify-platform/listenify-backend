@@ -34,7 +34,7 @@ func RegisterAllMethods(
 	mediaHandler := NewMediaHandler(mediaResolver, logger)
 	playlistHandler := NewPlaylistHandler(playlistManager, userManager, logger)
 	queueHandler := NewQueueHandler(queueManager, logger)
-	roomHandler := NewRoomHandler(roomManager, logger)
+	roomHandler := NewRoomHandler(roomManager, userManager, logger)
 
 	hr := router.Wrap(rpc.RecoveryMiddleware(logger)).Wrap(rpc.LoggingMiddleware(logger))
 

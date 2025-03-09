@@ -170,17 +170,52 @@ func (c *Client) SendNotification(method string, params any) {
 	c.send <- notificationJSON
 }
 
+// SendRoomNotification sends a notification to all clients in a room.
+func (c *Client) SendRoomNotification(roomID string, method string, params any) {
+	// Check if the client is in the room
+	if !c.IsInRoom(roomID) {
+		c.logger.Warn("Client not in room", "clientID", c.ID, "roomID", roomID)
+		return
+	}
+
+	c.sendRoomMsg(roomID, &Notification{
+		JSONRPC: "2.0",
+		Method:  method,
+		Params:  params,
+	})
+}
+
+func (c *Client) sendRoomMsg(roomID string, notify *Notification) {
+	notifyJSON, err := json.Marshal(notify)
+	if err != nil {
+		c.logger.Error("Failed to marshal room message", err, "message", notify)
+		return
+	}
+
+	c.server.BroadcastToRoom(roomID, notifyJSON)
+}
+
 // JoinRoom adds the client to a room.
-func (c *Client) JoinRoom(roomID string) {
+func (c *Client) JoinRoom(roomID string, method string, params any) {
 	c.rooms[roomID] = true
+	c.sendRoomMsg(roomID, &Notification{
+		JSONRPC: "2.0",
+		Method:  method,
+		Params:  params,
+	})
 	c.server.AddClientToRoom(c, roomID)
 	c.logger.Debug("Client joined room", "clientID", c.ID, "roomID", roomID)
 }
 
 // LeaveRoom removes the client from a room.
-func (c *Client) LeaveRoom(roomID string) {
+func (c *Client) LeaveRoom(roomID string, method string, params any) {
 	delete(c.rooms, roomID)
 	c.server.RemoveClientFromRoom(c, roomID)
+	c.sendRoomMsg(roomID, &Notification{
+		JSONRPC: "2.0",
+		Method:  method,
+		Params:  params,
+	})
 	c.logger.Debug("Client left room", "clientID", c.ID, "roomID", roomID)
 }
 

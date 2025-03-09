@@ -4,6 +4,7 @@ package rpc
 import (
 	"bytes"
 	"encoding/json"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -35,6 +36,32 @@ type Client struct {
 
 	// logger is the client's logger.
 	logger *utils.Logger
+
+	// mutex protects concurrent access to client properties
+	mutex sync.Mutex
+
+	// closed indicates whether the send channel has been closed
+	closed bool
+}
+
+// safelySendMessage sends a message only if the channel isn't closed
+func (c *Client) safelySendMessage(message []byte) bool {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	if c.closed {
+		return false
+	}
+
+	c.send <- message
+	return true
+}
+
+// markAsClosed marks the client's send channel as closed
+func (c *Client) markAsClosed() {
+	c.mutex.Lock()
+	c.closed = true
+	c.mutex.Unlock()
 }
 
 // readPump pumps messages from the WebSocket connection to the hub.
@@ -129,7 +156,7 @@ func (c *Client) handleMessage(message []byte) {
 			c.sendErrorResponse(request.ID, ErrInternalError, "Failed to marshal response")
 			return
 		}
-		c.send <- responseJSON
+		c.safelySendMessage(responseJSON)
 	}
 }
 
@@ -150,7 +177,7 @@ func (c *Client) sendErrorResponse(id any, code ErrorCode, message string) {
 		return
 	}
 
-	c.send <- responseJSON
+	c.safelySendMessage(responseJSON)
 }
 
 // SendNotification sends a notification to the client.
@@ -167,7 +194,7 @@ func (c *Client) SendNotification(method string, params any) {
 		return
 	}
 
-	c.send <- notificationJSON
+	c.safelySendMessage(notificationJSON)
 }
 
 // SendRoomNotification sends a notification to all clients in a room.

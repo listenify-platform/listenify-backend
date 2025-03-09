@@ -93,6 +93,7 @@ func (s *Server) run() {
 			s.mutex.Lock()
 			if _, ok := s.clients[client]; ok {
 				delete(s.clients, client)
+				client.markAsClosed() // Mark client as closed before closing the channel
 				close(client.send)
 				s.logger.Debug("Client unregistered", "id", client.ID, "userID", client.UserID)
 			}

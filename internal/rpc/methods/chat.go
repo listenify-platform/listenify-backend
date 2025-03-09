@@ -112,6 +112,15 @@ func (h *ChatHandler) SendMessage(ctx context.Context, client *rpc.Client, p *Se
 		}
 	}
 
+	// Send chat message notification
+	client.SendRoomNotification(p.RoomID, rpc.EventChatMessage, struct {
+		RoomID  string             `json:"roomId"`
+		Message models.ChatMessage `json:"message"`
+	}{
+		RoomID:  p.RoomID,
+		Message: sentMessage,
+	})
+
 	// Return sent message
 	return SendMessageResult{
 		Message: sentMessage,
@@ -183,7 +192,9 @@ type DeleteMessageParams struct {
 
 // DeleteMessageResult represents the result of the deleteMessage method.
 type DeleteMessageResult struct {
-	Success bool `json:"success"`
+	Success   bool   `json:"success"`
+	MessageID string `json:"messageId"`
+	RoomID    string `json:"roomId"`
 }
 
 // DeleteMessage handles deleting a chat message.
@@ -225,8 +236,19 @@ func (h *ChatHandler) DeleteMessage(ctx context.Context, client *rpc.Client, p *
 		}
 	}
 
-	// Return success
+	// Send chat message delete notification
+	client.SendRoomNotification(p.RoomID, rpc.EventChatMessageDelete, struct {
+		RoomID    string `json:"roomId"`
+		MessageID string `json:"messageId"`
+	}{
+		RoomID:    p.RoomID,
+		MessageID: p.MessageID,
+	})
+
+	// Return success with IDs
 	return DeleteMessageResult{
-		Success: true,
+		Success:   true,
+		MessageID: p.MessageID,
+		RoomID:    p.RoomID,
 	}, nil
 }

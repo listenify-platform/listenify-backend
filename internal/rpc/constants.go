@@ -53,6 +53,16 @@ const (
 	EventUserLeftRoom     = "user:room_leave"
 	EventRoomStateChanged = "room:state_changed"
 	EventRoomUpdated      = "room:updated"
+	EventRoomCreated      = "room:created"
+	EventRoomDeleted      = "room:deleted"
+
+	// Playlist events
+	EventPlaylistCreated       = "playlist:created"
+	EventPlaylistUpdated       = "playlist:updated"
+	EventPlaylistDeleted       = "playlist:deleted"
+	EventPlaylistItemAdded     = "playlist:item_added"
+	EventPlaylistItemRemoved   = "playlist:item_removed"
+	EventActivePlaylistChanged = "playlist:active_changed"
 
 	// Queue events
 	EventQueueUpdated = "queue:updated"

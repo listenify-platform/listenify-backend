@@ -4,6 +4,7 @@ package methods
 import (
 	"context"
 	"errors"
+	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"norelock.dev/listenify/backend/internal/models"
@@ -71,6 +72,9 @@ func (h *QueueHandler) JoinQueue(ctx context.Context, client *rpc.Client, p *Roo
 		return nil, rpc.NewError(rpc.ErrInternalError, err.Error(), nil)
 	}
 
+	// Send queue updated notification
+	client.SendRoomNotification(p.RoomID, rpc.EventQueueUpdated, roomState)
+
 	return roomState, nil
 }
 
@@ -98,6 +102,9 @@ func (h *QueueHandler) LeaveQueue(ctx context.Context, client *rpc.Client, p *Ro
 		h.logger.Error("Failed to remove user from queue", err, "roomId", p.RoomID, "userId", client.UserID)
 		return nil, rpc.NewError(rpc.ErrInternalError, err.Error(), nil)
 	}
+
+	// Send queue updated notification
+	client.SendRoomNotification(p.RoomID, rpc.EventQueueUpdated, roomState)
 
 	return roomState, nil
 }
@@ -139,6 +146,9 @@ func (h *QueueHandler) MoveInQueue(ctx context.Context, client *rpc.Client, p *M
 		h.logger.Error("Failed to move user in queue", err, "roomId", p.RoomID, "userId", p.UserID, "newPosition", p.NewPosition)
 		return nil, rpc.NewError(rpc.ErrInternalError, err.Error(), nil)
 	}
+
+	// Send queue updated notification
+	client.SendRoomNotification(p.RoomID, rpc.EventQueueUpdated, roomState)
 
 	return roomState, nil
 }
@@ -270,12 +280,40 @@ func (h *QueueHandler) PlayMedia(ctx context.Context, client *rpc.Client, p *Pla
 		return nil, rpc.NewError(rpc.ErrNotAuthorized, "only the current DJ can play media", nil)
 	}
 
+	// Get current DJ info
+	dj, err := h.queueManager.GetCurrentDJ(ctx, roomID)
+	if err != nil {
+		h.logger.Error("Failed to get current DJ", err, "roomId", p.RoomID)
+		return nil, rpc.NewError(rpc.ErrInternalError, err.Error(), nil)
+	}
+
 	// Play media
 	roomState, err := h.queueManager.PlayMedia(ctx, roomID, p.MediaInfo)
 	if err != nil {
 		h.logger.Error("Failed to play media", err, "roomId", p.RoomID)
 		return nil, rpc.NewError(rpc.ErrInternalError, err.Error(), nil)
 	}
+
+	// Calculate end time
+	startTime := time.Now()
+	endTime := startTime.Add(time.Duration(p.MediaInfo.Duration) * time.Second)
+
+	// Send single track start notification with complete state
+	client.SendRoomNotification(p.RoomID, rpc.EventTrackStart, struct {
+		RoomID    string             `json:"roomId"`
+		DJ        *models.PublicUser `json:"dj"`
+		Media     *models.MediaInfo  `json:"media"`
+		StartTime string             `json:"startTime"`
+		EndTime   string             `json:"endTime"`
+		State     *models.RoomState  `json:"state"`
+	}{
+		RoomID:    p.RoomID,
+		DJ:        dj,
+		Media:     p.MediaInfo,
+		StartTime: startTime.Format(time.RFC3339),
+		EndTime:   endTime.Format(time.RFC3339),
+		State:     roomState,
+	})
 
 	return roomState, nil
 }
@@ -300,6 +338,19 @@ func (h *QueueHandler) SkipCurrentMedia(ctx context.Context, client *rpc.Client,
 		return nil, rpc.NewError(rpc.ErrInternalError, err.Error(), nil)
 	}
 
+	// Send single track skip notification with complete state
+	client.SendRoomNotification(p.RoomID, rpc.EventTrackSkip, struct {
+		RoomID string            `json:"roomId"`
+		UserID string            `json:"userId"`
+		Reason string            `json:"reason"`
+		State  *models.RoomState `json:"state"`
+	}{
+		RoomID: p.RoomID,
+		UserID: client.UserID,
+		Reason: "skipped",
+		State:  roomState,
+	})
+
 	return roomState, nil
 }
 
@@ -323,6 +374,9 @@ func (h *QueueHandler) ClearQueue(ctx context.Context, client *rpc.Client, p *Ro
 		return nil, rpc.NewError(rpc.ErrInternalError, err.Error(), nil)
 	}
 
+	// Send queue updated notification
+	client.SendRoomNotification(p.RoomID, rpc.EventQueueUpdated, roomState)
+
 	return roomState, nil
 }
 
@@ -345,6 +399,9 @@ func (h *QueueHandler) ShuffleQueue(ctx context.Context, client *rpc.Client, p *
 		h.logger.Error("Failed to shuffle queue", err, "roomId", p.RoomID)
 		return nil, rpc.NewError(rpc.ErrInternalError, err.Error(), nil)
 	}
+
+	// Send queue updated notification
+	client.SendRoomNotification(p.RoomID, rpc.EventQueueUpdated, roomState)
 
 	return roomState, nil
 }

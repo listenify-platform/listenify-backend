@@ -133,25 +133,7 @@ func (c *Client) writePump() {
 				return
 			}
 
-			// Add queued messages to the current websocket message.
-			// Only process up to 10 messages at a time to prevent blocking too long
-			n := len(c.send)
-			maxBatch := 10
-			if n > maxBatch {
-				n = maxBatch
-			}
-
-			for i := 0; i < n; i++ {
-				select {
-				case msg := <-c.send:
-					w.Write([]byte{'\n'})
-					w.Write(msg)
-				default:
-					// No more messages immediately available
-					break
-				}
-			}
-
+			// Close the writer after writing the message
 			if err := w.Close(); err != nil {
 				c.logger.Error("Failed to close writer", err, "clientID", c.ID)
 				return

@@ -106,8 +106,18 @@ func (h *PlaylistHandler) CreatePlaylist(ctx context.Context, client *rpc.Client
 		// Continue anyway, we'll just return the playlist without owner info
 	}
 
-	// Return playlist info
+	// Create playlist info
 	playlistInfo := createdPlaylist.ToPlaylistInfo(user)
+
+	// Send playlist created notification
+	client.SendNotification(rpc.EventPlaylistCreated, struct {
+		Playlist models.PlaylistInfo `json:"playlist"`
+		User     *models.User        `json:"user,omitempty"`
+	}{
+		Playlist: playlistInfo,
+		User:     user,
+	})
+
 	return CreatePlaylistResult{
 		Playlist: playlistInfo,
 	}, nil
@@ -347,8 +357,18 @@ func (h *PlaylistHandler) UpdatePlaylist(ctx context.Context, client *rpc.Client
 		// Continue anyway, we'll just return the playlist without owner info
 	}
 
-	// Return playlist info
+	// Create playlist info
 	playlistInfo := updatedPlaylist.ToPlaylistInfo(user)
+
+	// Send playlist updated notification
+	client.SendNotification(rpc.EventPlaylistUpdated, struct {
+		Playlist models.PlaylistInfo `json:"playlist"`
+		User     *models.User        `json:"user,omitempty"`
+	}{
+		Playlist: playlistInfo,
+		User:     user,
+	})
+
 	return UpdatePlaylistResult{
 		Playlist: playlistInfo,
 	}, nil
@@ -402,6 +422,13 @@ func (h *PlaylistHandler) DeletePlaylist(ctx context.Context, client *rpc.Client
 		}
 	}
 
+	// Get user for notification
+	user, err := h.userManager.GetUserByID(ctx, client.UserID)
+	if err != nil {
+		h.logger.Error("Failed to get user info", err, "userId", client.UserID)
+		// Continue anyway, we'll just send the notification without user info
+	}
+
 	// Delete playlist
 	err = h.playlistManager.DeletePlaylist(ctx, playlistObjID)
 	if err != nil {
@@ -412,7 +439,15 @@ func (h *PlaylistHandler) DeletePlaylist(ctx context.Context, client *rpc.Client
 		}
 	}
 
-	// Return success
+	// Send playlist deleted notification
+	client.SendNotification(rpc.EventPlaylistDeleted, struct {
+		PlaylistID string       `json:"playlistId"`
+		User       *models.User `json:"user,omitempty"`
+	}{
+		PlaylistID: p.PlaylistID,
+		User:       user,
+	})
+
 	return DeletePlaylistResult{
 		Success: true,
 	}, nil
@@ -499,8 +534,20 @@ func (h *PlaylistHandler) AddPlaylistItem(ctx context.Context, client *rpc.Clien
 		// Continue anyway, we'll just return the playlist without owner info
 	}
 
-	// Return playlist info
+	// Create playlist info
 	playlistInfo := updatedPlaylist.ToPlaylistInfo(user)
+
+	// Send playlist item added notification
+	client.SendNotification(rpc.EventPlaylistItemAdded, struct {
+		Playlist models.PlaylistInfo `json:"playlist"`
+		MediaID  string              `json:"mediaId"`
+		User     *models.User        `json:"user,omitempty"`
+	}{
+		Playlist: playlistInfo,
+		MediaID:  p.MediaID,
+		User:     user,
+	})
+
 	return AddPlaylistItemResult{
 		Playlist: playlistInfo,
 	}, nil
@@ -580,8 +627,20 @@ func (h *PlaylistHandler) RemovePlaylistItem(ctx context.Context, client *rpc.Cl
 		// Continue anyway, we'll just return the playlist without owner info
 	}
 
-	// Return playlist info
+	// Create playlist info
 	playlistInfo := updatedPlaylist.ToPlaylistInfo(user)
+
+	// Send playlist item removed notification
+	client.SendNotification(rpc.EventPlaylistItemRemoved, struct {
+		Playlist models.PlaylistInfo `json:"playlist"`
+		ItemID   string              `json:"itemId"`
+		User     *models.User        `json:"user,omitempty"`
+	}{
+		Playlist: playlistInfo,
+		ItemID:   p.ItemID,
+		User:     user,
+	})
+
 	return RemovePlaylistItemResult{
 		Playlist: playlistInfo,
 	}, nil
@@ -648,8 +707,23 @@ func (h *PlaylistHandler) ImportPlaylist(ctx context.Context, client *rpc.Client
 		// Continue anyway, we'll just return the playlist without owner info
 	}
 
-	// Return playlist info
+	// Create playlist info
 	playlistInfo := importedPlaylist.ToPlaylistInfo(user)
+
+	// Send playlist created notification for imported playlist
+	client.SendNotification(rpc.EventPlaylistCreated, struct {
+		Playlist models.PlaylistInfo `json:"playlist"`
+		User     *models.User        `json:"user,omitempty"`
+		Source   string              `json:"source"`
+		SourceID string              `json:"sourceId"`
+	}{
+		Playlist: playlistInfo,
+		User:     user,
+		Source:   p.Source,
+		SourceID: p.SourceID,
+	})
+
+	// Return playlist info
 	return ImportPlaylistResult{
 		Playlist: playlistInfo,
 		Success:  true,
@@ -723,7 +797,22 @@ func (h *PlaylistHandler) SetActivePlaylist(ctx context.Context, client *rpc.Cli
 		}
 	}
 
-	// Return success
+	// Get user for notification
+	user, err := h.userManager.GetUserByID(ctx, client.UserID)
+	if err != nil {
+		h.logger.Error("Failed to get user info", err, "userId", client.UserID)
+		// Continue anyway, we'll just send the notification without user info
+	}
+
+	// Send active playlist changed notification
+	client.SendNotification(rpc.EventActivePlaylistChanged, struct {
+		PlaylistID string       `json:"playlistId"`
+		User       *models.User `json:"user,omitempty"`
+	}{
+		PlaylistID: p.PlaylistID,
+		User:       user,
+	})
+
 	return SetActivePlaylistResult{
 		Success: true,
 	}, nil

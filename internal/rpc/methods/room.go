@@ -92,6 +92,31 @@ func (h *RoomHandler) CreateRoom(ctx context.Context, client *rpc.Client, p *Cre
 		return nil, rpc.NewError(rpc.ErrInternalError, err.Error(), nil)
 	}
 
+	// Get user info for notifications
+	user, err := h.userMgr.GetPublicUserByID(ctx, client.UserID)
+	if err != nil {
+		h.logger.Error("Failed to get user info", err, "userId", client.UserID)
+		// Continue anyway, we have the room
+	}
+
+	// Get initial room state
+	state, err := h.roomManager.GetRoomState(ctx, createdRoom.ID)
+	if err != nil {
+		h.logger.Error("Failed to get room state", err, "roomId", createdRoom.ID.Hex())
+		// Continue anyway, we have the room
+	}
+
+	// Send single room created notification with complete state
+	client.SendNotification(rpc.EventRoomCreated, struct {
+		Room  *models.Room       `json:"room"`
+		User  *models.PublicUser `json:"user,omitempty"`
+		State *models.RoomState  `json:"state,omitempty"`
+	}{
+		Room:  createdRoom,
+		User:  user,
+		State: state,
+	})
+
 	// Join the room
 	err = h.roomManager.JoinRoom(ctx, createdRoom.ID, userID)
 	if err != nil {
@@ -214,6 +239,22 @@ func (h *RoomHandler) UpdateRoom(ctx context.Context, client *rpc.Client, p *Upd
 		return nil, rpc.NewError(rpc.ErrInternalError, err.Error(), nil)
 	}
 
+	// Get updated room state
+	state, err := h.roomManager.GetRoomState(ctx, roomID)
+	if err != nil {
+		h.logger.Error("Failed to get room state", err, "roomId", p.RoomID)
+		// Continue anyway, we have the updated room
+	}
+
+	// Send room updated notification with state
+	client.SendRoomNotification(p.RoomID, rpc.EventRoomUpdated, struct {
+		Room  *models.Room      `json:"room"`
+		State *models.RoomState `json:"state,omitempty"`
+	}{
+		Room:  updatedRoom,
+		State: state,
+	})
+
 	return updatedRoom, nil
 }
 
@@ -248,6 +289,24 @@ func (h *RoomHandler) DeleteRoom(ctx context.Context, client *rpc.Client, p *Roo
 	// Check if user is creator
 	if room.CreatedBy != userID {
 		return nil, rpc.ErrNotAuthorized.Error()
+	}
+
+	// Get final room state before deletion
+	state, err := h.roomManager.GetRoomState(ctx, roomID)
+	if err != nil {
+		h.logger.Error("Failed to get room state", err, "roomId", p.RoomID)
+		// Continue anyway, we'll delete the room
+	}
+
+	// Send room deletion notification with final state
+	if state != nil {
+		client.SendRoomNotification(p.RoomID, rpc.EventRoomDeleted, struct {
+			RoomID string            `json:"roomId"`
+			State  *models.RoomState `json:"state"`
+		}{
+			RoomID: p.RoomID,
+			State:  state,
+		})
 	}
 
 	// Delete room
@@ -317,20 +376,19 @@ func (h *RoomHandler) JoinRoom(ctx context.Context, client *rpc.Client, p *RoomI
 		return nil, rpc.NewError(rpc.ErrInternalError, err.Error(), nil)
 	}
 
-	// Create notification payload with proper types
+	// Create notification payload with proper types and state
 	joinPayload := struct {
-		RoomID string            `json:"roomId"`
-		User   models.PublicUser `json:"user"`
+		RoomID string             `json:"roomId"`
+		User   *models.PublicUser `json:"user"`
+		State  *models.RoomState  `json:"state"`
 	}{
 		RoomID: p.RoomID,
-		User:   *user,
+		User:   user,
+		State:  state,
 	}
 
-	// Send join notification with proper user object
+	// Send single join notification with complete state
 	client.JoinRoom(p.RoomID, rpc.EventUserJoinedRoom, joinPayload)
-
-	// Notify room state change with proper room state
-	client.SendRoomNotification(p.RoomID, rpc.EventRoomStateChanged, state)
 
 	h.logger.Debug("User joined room", "roomId", p.RoomID, "userId", client.UserID)
 
@@ -382,8 +440,8 @@ func (h *RoomHandler) LeaveRoom(ctx context.Context, client *rpc.Client, p *Room
 		// Continue with leave, but we won't have user info for notification
 	}
 
-	// Create leave notification payload
-	leavePayload := struct {
+	// Send single leave notification with complete state
+	client.LeaveRoom(p.RoomID, rpc.EventUserLeftRoom, struct {
 		RoomID string             `json:"roomId"`
 		UserID string             `json:"userId"`
 		User   *models.PublicUser `json:"user,omitempty"`
@@ -393,13 +451,7 @@ func (h *RoomHandler) LeaveRoom(ctx context.Context, client *rpc.Client, p *Room
 		UserID: client.UserID,
 		User:   user,
 		State:  state,
-	}
-
-	// Send leave notification with complete state
-	client.LeaveRoom(p.RoomID, rpc.EventUserLeftRoom, leavePayload)
-
-	// Notify room state change separately
-	client.SendRoomNotification(p.RoomID, rpc.EventRoomStateChanged, state)
+	})
 
 	h.logger.Debug("User left room", "roomId", p.RoomID, "userId", client.UserID)
 
@@ -447,8 +499,8 @@ func (h *RoomHandler) HandleDisconnect(ctx context.Context, client *rpc.Client) 
 			continue
 		}
 
-		// Create leave notification payload
-		leavePayload := struct {
+		// Send single leave notification with complete state
+		client.LeaveRoom(roomID, rpc.EventUserLeftRoom, struct {
 			RoomID string             `json:"roomId"`
 			UserID string             `json:"userId"`
 			User   *models.PublicUser `json:"user,omitempty"`
@@ -458,13 +510,7 @@ func (h *RoomHandler) HandleDisconnect(ctx context.Context, client *rpc.Client) 
 			UserID: client.UserID,
 			User:   user,
 			State:  state,
-		}
-
-		// Send leave notification with complete state
-		client.LeaveRoom(roomID, rpc.EventUserLeftRoom, leavePayload)
-
-		// Notify room state change separately
-		client.SendRoomNotification(roomID, rpc.EventRoomStateChanged, state)
+		})
 	}
 }
 

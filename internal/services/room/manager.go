@@ -170,14 +170,14 @@ func (m *Manager) GetRoomState(ctx context.Context, roomID bson.ObjectID) (*mode
 		return nil, err
 	}
 
+	// Get room from database
+	room, err := m.GetRoom(ctx, roomID)
+	if err != nil {
+		return nil, err
+	}
+
 	// If state doesn't exist, create a new one
 	if managerState == nil {
-		// Get room from database
-		room, err := m.GetRoom(ctx, roomID)
-		if err != nil {
-			return nil, err
-		}
-
 		// Initialize room state
 		err = m.stateManager.InitRoom(ctx, roomID.Hex())
 		if err != nil {
@@ -202,7 +202,9 @@ func (m *Manager) GetRoomState(ctx context.Context, roomID bson.ObjectID) (*mode
 	// Convert managers.RoomState to models.RoomState
 	modelState := &models.RoomState{
 		ID:          roomID,
+		Name:        room.Name,
 		ActiveUsers: managerState.ActiveUsers,
+		Settings:    room.Settings,
 		DJQueue:     []models.QueueEntry{},
 		Users:       []models.PublicUser{},
 		PlayHistory: []models.PlayHistoryEntry{},
@@ -212,9 +214,6 @@ func (m *Manager) GetRoomState(ctx context.Context, roomID bson.ObjectID) (*mode
 	if managerState.Data != nil {
 		if name, ok := managerState.Data["name"].(string); ok {
 			modelState.Name = name
-		}
-		if settings, ok := managerState.Data["settings"].(models.RoomSettings); ok {
-			modelState.Settings = settings
 		}
 	}
 

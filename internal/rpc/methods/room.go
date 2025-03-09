@@ -297,6 +297,8 @@ func (h *RoomHandler) JoinRoom(ctx context.Context, client *rpc.Client, p *RoomI
 		return nil, rpc.NewError(rpc.ErrInternalError, err.Error(), nil)
 	}
 
+	h.logger.Debug("User joining room", "roomId", p.RoomID, "userId", client.UserID)
+
 	user, err := h.userMgr.GetPublicUserByID(ctx, client.UserID)
 	if err != nil {
 		h.logger.Error("Failed to get user", err, "userId", client.UserID)
@@ -318,6 +320,7 @@ func (h *RoomHandler) JoinRoom(ctx context.Context, client *rpc.Client, p *RoomI
 		h.logger.Error("Failed to get room state after joining", err, "roomId", p.RoomID)
 		return true, nil // Return success anyway, the user joined the room
 	}
+	h.logger.Debug("User joined room", "roomId", p.RoomID, "userId", client.UserID)
 
 	return state, nil
 }
@@ -339,6 +342,8 @@ func (h *RoomHandler) LeaveRoom(ctx context.Context, client *rpc.Client, p *Room
 	if err != nil {
 		return nil, rpc.NewError(rpc.ErrInvalidParams, "invalid userId", nil)
 	}
+
+	h.logger.Debug("User leaving room", "roomId", p.RoomID, "userId", client.UserID)
 
 	// Leave room
 	err = h.roomManager.LeaveRoom(ctx, roomID, userID)

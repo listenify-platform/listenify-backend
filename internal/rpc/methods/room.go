@@ -375,25 +375,97 @@ func (h *RoomHandler) LeaveRoom(ctx context.Context, client *rpc.Client, p *Room
 		return nil, rpc.NewError(rpc.ErrInternalError, err.Error(), nil)
 	}
 
-	// Create leave notification payload with proper types
+	// Get user info before leaving for the notification
+	user, err := h.userMgr.GetPublicUserByID(ctx, client.UserID)
+	if err != nil {
+		h.logger.Error("Failed to get user info for leave notification", err, "userId", client.UserID)
+		// Continue with leave, but we won't have user info for notification
+	}
+
+	// Create leave notification payload
 	leavePayload := struct {
-		RoomID string `json:"roomId"`
-		UserID string `json:"userId"`
+		RoomID string             `json:"roomId"`
+		UserID string             `json:"userId"`
+		User   *models.PublicUser `json:"user,omitempty"`
+		State  *models.RoomState  `json:"state"`
 	}{
 		RoomID: p.RoomID,
 		UserID: client.UserID,
+		User:   user,
+		State:  state,
 	}
 
-	// Send leave notification
+	// Send leave notification with complete state
 	client.LeaveRoom(p.RoomID, rpc.EventUserLeftRoom, leavePayload)
 
-	// Notify room state change with proper room state
+	// Notify room state change separately
 	client.SendRoomNotification(p.RoomID, rpc.EventRoomStateChanged, state)
 
 	h.logger.Debug("User left room", "roomId", p.RoomID, "userId", client.UserID)
 
 	// Return complete room state as method response
 	return state, nil
+}
+
+// HandleDisconnect handles cleanup when a user disconnects
+func (h *RoomHandler) HandleDisconnect(ctx context.Context, client *rpc.Client) {
+	h.logger.Debug("Handling user disconnect", "userId", client.UserID)
+
+	// Get all rooms the user is in
+	rooms := client.GetRooms()
+
+	// Leave each room
+	for _, roomID := range rooms {
+		h.logger.Debug("Cleaning up user from room on disconnect", "roomId", roomID, "userId", client.UserID)
+
+		// Leave room and send notifications
+		if _, err := h.LeaveRoom(ctx, client, &RoomIDParam{RoomID: roomID}); err != nil {
+			h.logger.Error("Failed to cleanup user from room", err, "roomId", roomID, "userId", client.UserID)
+			// Continue with other rooms even if one fails
+		}
+	}
+
+	// Get user for notifications
+	user, err := h.userMgr.GetPublicUserByID(ctx, client.UserID)
+	if err != nil {
+		h.logger.Error("Failed to get user info for disconnect", err, "userId", client.UserID)
+		// Continue with cleanup even without user info
+	}
+
+	// Send leave notifications for each room
+	for _, roomID := range rooms {
+		// Get room state for notification
+		roomObjID, err := bson.ObjectIDFromHex(roomID)
+		if err != nil {
+			h.logger.Error("Invalid room ID during disconnect", err, "roomId", roomID)
+			continue
+		}
+
+		state, err := h.roomManager.GetRoomState(ctx, roomObjID)
+		if err != nil {
+			h.logger.Error("Failed to get room state during disconnect", err, "roomId", roomID)
+			continue
+		}
+
+		// Create leave notification payload
+		leavePayload := struct {
+			RoomID string             `json:"roomId"`
+			UserID string             `json:"userId"`
+			User   *models.PublicUser `json:"user,omitempty"`
+			State  *models.RoomState  `json:"state"`
+		}{
+			RoomID: roomID,
+			UserID: client.UserID,
+			User:   user,
+			State:  state,
+		}
+
+		// Send leave notification with complete state
+		client.LeaveRoom(roomID, rpc.EventUserLeftRoom, leavePayload)
+
+		// Notify room state change separately
+		client.SendRoomNotification(roomID, rpc.EventRoomStateChanged, state)
+	}
 }
 
 // GetRoomUsers gets all users in a room.

@@ -336,62 +336,87 @@ func (m *Manager) JoinRoom(ctx context.Context, roomID, userID bson.ObjectID) er
 	return nil
 }
 
-// LeaveRoom removes a user from a room.
+// LeaveRoom removes a user from a room and performs cleanup.
 func (m *Manager) LeaveRoom(ctx context.Context, roomID, userID bson.ObjectID) error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	// Get room state
+	// Get room state first to check if user is actually in the room
 	state, err := m.GetRoomState(ctx, roomID)
 	if err != nil {
+		if errors.Is(err, models.ErrRoomNotFound) {
+			// If room doesn't exist, just clean up user presence
+			if err := m.cleanupUserPresence(ctx, userID); err != nil {
+				m.logger.Error("Failed to cleanup user presence", err, "userId", userID.Hex())
+			}
+			return nil
+		}
 		return err
 	}
 
-	// Find user in room
-	index := -1
-	for i, u := range state.Users {
+	// Check if user is in room
+	userInRoom := false
+	for _, u := range state.Users {
 		if u.ID == userID {
-			index = i
+			userInRoom = true
 			break
 		}
 	}
 
-	// If user is not in room, return
-	if index == -1 {
+	// Even if user is not in room, we should still clean up their presence
+	if !userInRoom {
+		if err := m.cleanupUserPresence(ctx, userID); err != nil {
+			m.logger.Error("Failed to cleanup user presence", err, "userId", userID.Hex())
+		}
 		return nil
 	}
 
 	// Remove user from Redis first
-	err = m.stateManager.RemoveUserFromRoom(ctx, roomID.Hex(), userID.Hex())
-	if err != nil {
-		return fmt.Errorf("failed to remove user from Redis: %w", err)
+	if err := m.stateManager.RemoveUserFromRoom(ctx, roomID.Hex(), userID.Hex()); err != nil {
+		m.logger.Error("Failed to remove user from Redis", err, "roomId", roomID.Hex(), "userId", userID.Hex())
+		// Continue with cleanup even if Redis removal fails
 	}
 
-	// Get updated room state with current users
-	state, err = m.GetRoomState(ctx, roomID)
-	if err != nil {
-		return fmt.Errorf("failed to get updated room state: %w", err)
-	}
-
-	// Update presence by removing room
-	err = m.presenceManager.SetUserRoom(ctx, userID, "")
-	if err != nil {
-		m.logger.Error("Failed to clear user room", err, "userId", userID.Hex(), "roomId", roomID.Hex())
-		// Continue anyway, the user was removed from the room successfully
+	// Clean up user presence
+	if err := m.cleanupUserPresence(ctx, userID); err != nil {
+		m.logger.Error("Failed to cleanup user presence", err, "userId", userID.Hex())
+		// Continue with room update even if presence cleanup fails
 	}
 
 	// Update room last activity
+	if err := m.updateRoomActivity(ctx, roomID); err != nil {
+		m.logger.Error("Failed to update room activity", err, "roomId", roomID.Hex())
+		// Continue anyway as the user has been removed
+	}
+
+	return nil
+}
+
+// cleanupUserPresence handles all presence-related cleanup for a user
+func (m *Manager) cleanupUserPresence(ctx context.Context, userID bson.ObjectID) error {
+	// Clear user's current room
+	if err := m.presenceManager.SetUserRoom(ctx, userID, ""); err != nil {
+		return fmt.Errorf("failed to clear user room: %w", err)
+	}
+
+	// Update user presence to offline
+	if err := m.presenceManager.UpdatePresence(ctx, userID, "", "offline"); err != nil {
+		return fmt.Errorf("failed to update user presence: %w", err)
+	}
+
+	return nil
+}
+
+// updateRoomActivity updates the room's last activity timestamp
+func (m *Manager) updateRoomActivity(ctx context.Context, roomID bson.ObjectID) error {
 	room, err := m.GetRoom(ctx, roomID)
 	if err != nil {
-		m.logger.Error("Failed to get room", err, "roomId", roomID.Hex())
-		return nil // Continue anyway, the user was removed successfully
+		return fmt.Errorf("failed to get room: %w", err)
 	}
 
 	room.LastActivity = time.Now()
-	err = m.roomRepo.Update(ctx, room)
-	if err != nil {
-		m.logger.Error("Failed to update room last activity", err, "roomId", roomID.Hex())
-		// Continue anyway, the user was removed successfully
+	if err := m.roomRepo.Update(ctx, room); err != nil {
+		return fmt.Errorf("failed to update room: %w", err)
 	}
 
 	return nil

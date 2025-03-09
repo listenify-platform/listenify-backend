@@ -167,9 +167,8 @@ func (h *Hub) broadcastMessage(message []byte) {
 	defer h.mutex.RUnlock()
 
 	for client := range h.clients {
-		select {
-		case client.send <- message:
-		default:
+		// Use safelySendMessage instead of direct channel send
+		if !client.safelySendMessage(message) {
 			h.unregisterClient(client)
 		}
 	}
@@ -182,9 +181,8 @@ func (h *Hub) broadcastToRoom(room string, message []byte) {
 
 	if clients, ok := h.rooms[room]; ok {
 		for client := range clients {
-			select {
-			case client.send <- message:
-			default:
+			// Use safelySendMessage instead of direct channel send
+			if !client.safelySendMessage(message) {
 				h.unregisterClient(client)
 			}
 		}
@@ -198,9 +196,8 @@ func (h *Hub) broadcastToUser(userID string, message []byte) {
 
 	if clients, ok := h.userClients[userID]; ok {
 		for client := range clients {
-			select {
-			case client.send <- message:
-			default:
+			// Use safelySendMessage instead of direct channel send
+			if !client.safelySendMessage(message) {
 				h.unregisterClient(client)
 			}
 		}

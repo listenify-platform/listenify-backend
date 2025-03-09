@@ -56,6 +56,17 @@ func WithID(handler HandlerFunc1[bson.ObjectID]) http.HandlerFunc {
 	}
 }
 
+func WithParam(paramName string, handler HandlerFunc1[string]) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		param := chi.URLParam(r, paramName)
+		if param == "" {
+			utils.RespondWithError(w, http.StatusBadRequest, "Parameter is required")
+			return
+		}
+		handler(w, r, param)
+	}
+}
+
 func WithBody[T any](handler HandlerFunc1[*T]) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var data T

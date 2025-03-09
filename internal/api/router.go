@@ -121,6 +121,7 @@ func NewRouter(
 			r.Get("/popular", roomHandler.ListPopular)
 			r.Get("/favorites", roomHandler.ListFavorites)
 			r.Get("/search", roomHandler.Search)
+			r.Get("/by-slug/{slug}", WithParam("slug", roomHandler.GetBySlug))
 			r.Get("/{id}/state", WithID(roomHandler.GetState))
 			r.Get("/{id}/user", WithID(roomHandler.HasUser))
 			r.Post("/{id}/join", WithID(roomHandler.PostJoin))

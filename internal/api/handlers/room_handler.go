@@ -121,6 +121,26 @@ func (h *RoomHandler) Get(w http.ResponseWriter, r *http.Request, roomID bson.Ob
 	utils.RespondWithJSON(w, http.StatusOK, room)
 }
 
+func (h *RoomHandler) GetBySlug(w http.ResponseWriter, r *http.Request, slug string) {
+	room, err := h.mgr.GetRoomBySlug(r.Context(), slug)
+	if err != nil {
+		if errors.Is(err, models.ErrRoomNotFound) {
+			utils.RespondWithError(w, http.StatusNotFound, "Room not found")
+		} else {
+			h.logger.Error("Failed to get room by slug", err)
+			utils.RespondWithError(w, http.StatusInternalServerError, "Internal server error")
+		}
+		return
+	}
+
+	if room == nil {
+		utils.RespondWithError(w, http.StatusNotFound, "Room not found")
+		return
+	}
+
+	utils.RespondWithJSON(w, http.StatusOK, room)
+}
+
 func (h *RoomHandler) GetState(w http.ResponseWriter, r *http.Request, id bson.ObjectID) {
 	state, err := h.mgr.GetRoomState(r.Context(), id)
 	if err != nil {

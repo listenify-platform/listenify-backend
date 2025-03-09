@@ -34,19 +34,19 @@ func NewRoomHandler(roomManager room.RoomManager, userMgr *user.Manager, logger 
 // RegisterMethods registers all room-related RPC methods.
 func (h *RoomHandler) RegisterMethods(hr rpc.HandlerRegistry) {
 	auth := hr.Wrap(rpc.AuthMiddleware)
-	rpc.Register(auth, "room.create", h.CreateRoom)
-	rpc.Register(hr, "room.get", h.GetRoom)
-	rpc.Register(hr, "room.getBySlug", h.GetRoomBySlug)
-	rpc.Register(auth, "room.update", h.UpdateRoom)
-	rpc.Register(auth, "room.delete", h.DeleteRoom)
-	rpc.Register(auth, "room.join", h.JoinRoom)
-	rpc.Register(auth, "room.leave", h.LeaveRoom)
-	rpc.Register(hr, "room.getUsers", h.GetRoomUsers)
-	rpc.Register(hr, "room.isUserInRoom", h.IsUserInRoom)
-	rpc.Register(hr, "room.getState", h.GetRoomState)
-	rpc.Register(hr, "room.search", h.SearchRooms)
-	rpc.Register(hr, "room.getActive", h.GetActiveRooms)
-	rpc.Register(hr, "room.getPopular", h.GetPopularRooms)
+	rpc.Register(auth, rpc.MethodRoomCreate, h.CreateRoom)
+	rpc.Register(hr, rpc.MethodRoomGet, h.GetRoom)
+	rpc.Register(hr, rpc.MethodRoomGetBySlug, h.GetRoomBySlug)
+	rpc.Register(auth, rpc.MethodRoomUpdate, h.UpdateRoom)
+	rpc.Register(auth, rpc.MethodRoomDelete, h.DeleteRoom)
+	rpc.Register(auth, rpc.MethodRoomJoin, h.JoinRoom)
+	rpc.Register(auth, rpc.MethodRoomLeave, h.LeaveRoom)
+	rpc.Register(hr, rpc.MethodRoomGetUsers, h.GetRoomUsers)
+	rpc.Register(hr, rpc.MethodRoomIsUserInRoom, h.IsUserInRoom)
+	rpc.Register(hr, rpc.MethodRoomGetState, h.GetRoomState)
+	rpc.Register(hr, rpc.MethodRoomSearch, h.SearchRooms)
+	rpc.Register(hr, rpc.MethodRoomGetActive, h.GetActiveRooms)
+	rpc.Register(hr, rpc.MethodRoomGetPopular, h.GetPopularRooms)
 }
 
 // CreateRoomParams represents the parameters for the CreateRoom method.
@@ -278,6 +278,8 @@ func (h *RoomHandler) JoinRoom(ctx context.Context, client *rpc.Client, p *RoomI
 		return nil, rpc.NewError(rpc.ErrInvalidParams, "invalid userId", nil)
 	}
 
+	h.logger.Debug("User joining room", "roomId", p.RoomID, "userId", client.UserID)
+
 	// Join room
 	err = h.roomManager.JoinRoom(ctx, roomID, userID)
 	if err != nil {
@@ -297,11 +299,10 @@ func (h *RoomHandler) JoinRoom(ctx context.Context, client *rpc.Client, p *RoomI
 		return nil, rpc.NewError(rpc.ErrInternalError, err.Error(), nil)
 	}
 
-	h.logger.Debug("User joining room", "roomId", p.RoomID, "userId", client.UserID)
-
+	// Get user info before joining
 	user, err := h.userMgr.GetPublicUserByID(ctx, client.UserID)
 	if err != nil {
-		h.logger.Error("Failed to get user", err, "userId", client.UserID)
+		h.logger.Error("Failed to get user info", err, "userId", client.UserID)
 		return nil, rpc.NewError(rpc.ErrInternalError, err.Error(), nil)
 	}
 	if user == nil {
@@ -309,19 +310,31 @@ func (h *RoomHandler) JoinRoom(ctx context.Context, client *rpc.Client, p *RoomI
 		return nil, rpc.NewError(rpc.ErrNotAuthorized, "user not found", nil)
 	}
 
-	client.JoinRoom(p.RoomID, "room:user_join", map[string]any{
-		"roomId": p.RoomID,
-		"user":   user,
-	})
-
-	// Get room state
+	// Get updated room state after join
 	state, err := h.roomManager.GetRoomState(ctx, roomID)
 	if err != nil {
 		h.logger.Error("Failed to get room state after joining", err, "roomId", p.RoomID)
-		return true, nil // Return success anyway, the user joined the room
+		return nil, rpc.NewError(rpc.ErrInternalError, err.Error(), nil)
 	}
+
+	// Create notification payload with proper types
+	joinPayload := struct {
+		RoomID string            `json:"roomId"`
+		User   models.PublicUser `json:"user"`
+	}{
+		RoomID: p.RoomID,
+		User:   *user,
+	}
+
+	// Send join notification with proper user object
+	client.JoinRoom(p.RoomID, rpc.EventUserJoinedRoom, joinPayload)
+
+	// Notify room state change with proper room state
+	client.SendRoomNotification(p.RoomID, rpc.EventRoomStateChanged, state)
+
 	h.logger.Debug("User joined room", "roomId", p.RoomID, "userId", client.UserID)
 
+	// Return complete room state as method response
 	return state, nil
 }
 
@@ -355,12 +368,32 @@ func (h *RoomHandler) LeaveRoom(ctx context.Context, client *rpc.Client, p *Room
 		return nil, rpc.NewError(rpc.ErrInternalError, err.Error(), nil)
 	}
 
-	client.LeaveRoom(p.RoomID, "room:user_leave", map[string]any{
-		"roomId": p.RoomID,
-		"userId": client.UserID,
-	})
+	// Get final room state after leave
+	state, err := h.roomManager.GetRoomState(ctx, roomID)
+	if err != nil {
+		h.logger.Error("Failed to get room state after leaving", err, "roomId", p.RoomID)
+		return nil, rpc.NewError(rpc.ErrInternalError, err.Error(), nil)
+	}
 
-	return true, nil
+	// Create leave notification payload with proper types
+	leavePayload := struct {
+		RoomID string `json:"roomId"`
+		UserID string `json:"userId"`
+	}{
+		RoomID: p.RoomID,
+		UserID: client.UserID,
+	}
+
+	// Send leave notification
+	client.LeaveRoom(p.RoomID, rpc.EventUserLeftRoom, leavePayload)
+
+	// Notify room state change with proper room state
+	client.SendRoomNotification(p.RoomID, rpc.EventRoomStateChanged, state)
+
+	h.logger.Debug("User left room", "roomId", p.RoomID, "userId", client.UserID)
+
+	// Return complete room state as method response
+	return state, nil
 }
 
 // GetRoomUsers gets all users in a room.

@@ -4,6 +4,7 @@ package room
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -176,41 +177,55 @@ func (m *Manager) GetRoomState(ctx context.Context, roomID bson.ObjectID) (*mode
 		return nil, err
 	}
 
-	// If state doesn't exist, create a new one
+	// If state doesn't exist, initialize it
 	if managerState == nil {
-		// Initialize room state
 		err = m.stateManager.InitRoom(ctx, roomID.Hex())
 		if err != nil {
 			m.logger.Error("Failed to initialize room state", err, "roomId", roomID.Hex())
-			// Continue anyway, we'll create a local state
 		}
-
-		// Create new state
-		modelState := &models.RoomState{
-			ID:          room.ID,
-			Name:        room.Name,
-			Settings:    room.Settings,
-			DJQueue:     []models.QueueEntry{},
-			ActiveUsers: 0,
-			Users:       []models.PublicUser{},
-			PlayHistory: []models.PlayHistoryEntry{},
+		managerState, err = m.stateManager.GetRoomState(ctx, roomID.Hex())
+		if err != nil {
+			return nil, err
 		}
-
-		return modelState, nil
 	}
 
-	// Convert managers.RoomState to models.RoomState
+	// Get all users in the room from Redis
+	userIDs, err := m.stateManager.GetRoomUsers(ctx, roomID.Hex())
+	if err != nil {
+		m.logger.Error("Failed to get room users", err, "roomId", roomID.Hex())
+		return nil, err
+	}
+
+	// Fetch user details for each ID
+	users := make([]models.PublicUser, 0, len(userIDs))
+	for _, userIDStr := range userIDs {
+		userID, err := bson.ObjectIDFromHex(userIDStr)
+		if err != nil {
+			m.logger.Error("Invalid user ID in Redis", err, "userId", userIDStr)
+			continue
+		}
+
+		user, err := m.userRepo.FindByID(ctx, userID)
+		if err != nil {
+			m.logger.Error("Failed to get user", err, "userId", userIDStr)
+			continue
+		}
+
+		users = append(users, user.ToPublicUser())
+	}
+
+	// Create room state with all information
 	modelState := &models.RoomState{
 		ID:          roomID,
 		Name:        room.Name,
-		ActiveUsers: managerState.ActiveUsers,
+		ActiveUsers: len(users),
 		Settings:    room.Settings,
 		DJQueue:     []models.QueueEntry{},
-		Users:       []models.PublicUser{},
+		Users:       users,
 		PlayHistory: []models.PlayHistoryEntry{},
 	}
 
-	// Extract name and settings from Data map if available
+	// Add additional data from Redis state
 	if managerState.Data != nil {
 		if name, ok := managerState.Data["name"].(string); ok {
 			modelState.Name = name
@@ -284,15 +299,16 @@ func (m *Manager) JoinRoom(ctx context.Context, roomID, userID bson.ObjectID) er
 		return errors.New("user is banned from this room")
 	}
 
-	// Add user to room
-	publicUser := user.ToPublicUser()
-	state.Users = append(state.Users, publicUser)
-	state.ActiveUsers = len(state.Users)
-
-	// Update room state
-	err = m.UpdateRoomState(ctx, roomID, state)
+	// Add user to Redis first
+	err = m.stateManager.AddUserToRoom(ctx, roomID.Hex(), userID.Hex())
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to add user to Redis: %w", err)
+	}
+
+	// Get updated room state with all users
+	state, err = m.GetRoomState(ctx, roomID)
+	if err != nil {
+		return fmt.Errorf("failed to get updated room state: %w", err)
 	}
 
 	// Update presence
@@ -345,14 +361,16 @@ func (m *Manager) LeaveRoom(ctx context.Context, roomID, userID bson.ObjectID) e
 		return nil
 	}
 
-	// Remove user from room
-	state.Users = slices.Delete(state.Users, index, index+1)
-	state.ActiveUsers = len(state.Users)
-
-	// Update room state
-	err = m.UpdateRoomState(ctx, roomID, state)
+	// Remove user from Redis first
+	err = m.stateManager.RemoveUserFromRoom(ctx, roomID.Hex(), userID.Hex())
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to remove user from Redis: %w", err)
+	}
+
+	// Get updated room state with current users
+	state, err = m.GetRoomState(ctx, roomID)
+	if err != nil {
+		return fmt.Errorf("failed to get updated room state: %w", err)
 	}
 
 	// Update presence by removing room
@@ -360,6 +378,20 @@ func (m *Manager) LeaveRoom(ctx context.Context, roomID, userID bson.ObjectID) e
 	if err != nil {
 		m.logger.Error("Failed to clear user room", err, "userId", userID.Hex(), "roomId", roomID.Hex())
 		// Continue anyway, the user was removed from the room successfully
+	}
+
+	// Update room last activity
+	room, err := m.GetRoom(ctx, roomID)
+	if err != nil {
+		m.logger.Error("Failed to get room", err, "roomId", roomID.Hex())
+		return nil // Continue anyway, the user was removed successfully
+	}
+
+	room.LastActivity = time.Now()
+	err = m.roomRepo.Update(ctx, room)
+	if err != nil {
+		m.logger.Error("Failed to update room last activity", err, "roomId", roomID.Hex())
+		// Continue anyway, the user was removed successfully
 	}
 
 	return nil

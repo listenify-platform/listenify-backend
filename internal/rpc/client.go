@@ -45,6 +45,7 @@ type Client struct {
 }
 
 // safelySendMessage sends a message only if the channel isn't closed
+// Uses non-blocking send to prevent deadlocks if channel is full
 func (c *Client) safelySendMessage(message []byte) bool {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
@@ -54,8 +55,15 @@ func (c *Client) safelySendMessage(message []byte) bool {
 		return false
 	}
 
-	c.send <- message
-	return true
+	// Use non-blocking send with select
+	select {
+	case c.send <- message:
+		return true
+	default:
+		// Channel is full, log and return false to trigger unregistration
+		c.logger.Warn("Client send channel is full, message dropped", "clientID", c.ID)
+		return false
+	}
 }
 
 // markAsClosed marks the client's send channel as closed
@@ -99,6 +107,8 @@ func (c *Client) writePump() {
 	defer func() {
 		ticker.Stop()
 		c.conn.Close()
+		// Ensure client is unregistered if writePump exits
+		c.server.unregister <- c
 	}()
 
 	for {
@@ -113,23 +123,43 @@ func (c *Client) writePump() {
 
 			w, err := c.conn.NextWriter(websocket.TextMessage)
 			if err != nil {
+				c.logger.Error("Failed to get next writer", err, "clientID", c.ID)
 				return
 			}
-			w.Write(message)
+
+			_, err = w.Write(message)
+			if err != nil {
+				c.logger.Error("Failed to write message", err, "clientID", c.ID)
+				return
+			}
 
 			// Add queued messages to the current websocket message.
+			// Only process up to 10 messages at a time to prevent blocking too long
 			n := len(c.send)
-			for range n {
-				w.Write([]byte{'\n'})
-				w.Write(<-c.send)
+			maxBatch := 10
+			if n > maxBatch {
+				n = maxBatch
+			}
+
+			for i := 0; i < n; i++ {
+				select {
+				case msg := <-c.send:
+					w.Write([]byte{'\n'})
+					w.Write(msg)
+				default:
+					// No more messages immediately available
+					break
+				}
 			}
 
 			if err := w.Close(); err != nil {
+				c.logger.Error("Failed to close writer", err, "clientID", c.ID)
 				return
 			}
 		case <-ticker.C:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				c.logger.Error("Failed to write ping message", err, "clientID", c.ID)
 				return
 			}
 		}

@@ -165,46 +165,70 @@ func (h *Hub) unregisterClient(client *Client) {
 // broadcastMessage broadcasts a message to all clients.
 func (h *Hub) broadcastMessage(message []byte) {
 	h.mutex.RLock()
-	defer h.mutex.RUnlock()
+	var clientsToUnregister []*Client
 
 	for client := range h.clients {
 		// Use safelySendMessage instead of direct channel send
 		if !client.safelySendMessage(message) {
-			h.unregisterClient(client)
+			clientsToUnregister = append(clientsToUnregister, client)
+		} else {
+			h.logger.Debug("Sent to client", "clientID", client.ID)
 		}
-		h.logger.Debug("Sent to client", "clientID", client.ID)
+	}
+
+	h.mutex.RUnlock()
+
+	// Unregister clients outside of the read lock
+	for _, client := range clientsToUnregister {
+		h.unregister <- client
 	}
 }
 
 // broadcastToRoom broadcasts a message to all clients in a room.
 func (h *Hub) broadcastToRoom(room string, message []byte) {
 	h.mutex.RLock()
-	defer h.mutex.RUnlock()
+	var clientsToUnregister []*Client
 
 	if clients, ok := h.rooms[room]; ok {
 		for client := range clients {
 			// Use safelySendMessage instead of direct channel send
 			if !client.safelySendMessage(message) {
-				h.unregisterClient(client)
+				clientsToUnregister = append(clientsToUnregister, client)
+			} else {
+				h.logger.Debug("Sent to client in room", "clientID", client.ID, "room", room)
 			}
-			h.logger.Debug("Sent to client in room", "clientID", client.ID, "room", room)
 		}
+	}
+
+	h.mutex.RUnlock()
+
+	// Unregister clients outside of the read lock
+	for _, client := range clientsToUnregister {
+		h.unregister <- client
 	}
 }
 
 // broadcastToUser broadcasts a message to all clients of a user.
 func (h *Hub) broadcastToUser(userID string, message []byte) {
 	h.mutex.RLock()
-	defer h.mutex.RUnlock()
+	var clientsToUnregister []*Client
 
 	if clients, ok := h.userClients[userID]; ok {
 		for client := range clients {
 			// Use safelySendMessage instead of direct channel send
 			if !client.safelySendMessage(message) {
-				h.unregisterClient(client)
+				clientsToUnregister = append(clientsToUnregister, client)
+			} else {
+				h.logger.Debug("Sent to client of user", "clientID", client.ID, "userID", userID)
 			}
-			h.logger.Debug("Sent to client of user", "clientID", client.ID, "userID", userID)
 		}
+	}
+
+	h.mutex.RUnlock()
+
+	// Unregister clients outside of the read lock
+	for _, client := range clientsToUnregister {
+		h.unregister <- client
 	}
 }
 

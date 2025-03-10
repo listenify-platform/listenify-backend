@@ -3,13 +3,16 @@ package rpc
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"go.mongodb.org/mongo-driver/v2/bson"
 	"norelock.dev/listenify/backend/internal/auth"
 	"norelock.dev/listenify/backend/internal/db/redis/managers"
+	"norelock.dev/listenify/backend/internal/services/system"
 	"norelock.dev/listenify/backend/internal/utils"
 )
 
@@ -37,16 +40,17 @@ var upgrader = websocket.Upgrader{
 
 // Server handles WebSocket connections and RPC requests.
 type Server struct {
-	hub          *Hub
-	router       *Router
-	authProvider auth.Provider
-	sessionMgr   managers.SessionManager
-	presenceMgr  managers.PresenceManager
-	logger       *utils.Logger
-	clients      map[*Client]bool
-	register     chan *Client
-	unregister   chan *Client
-	mutex        sync.Mutex
+	hub                *Hub
+	router             *Router
+	authProvider       auth.Provider
+	sessionMgr         managers.SessionManager
+	presenceMgr        managers.PresenceManager
+	maintenanceService *system.MaintenanceService
+	logger             *utils.Logger
+	clients            map[*Client]bool
+	register           chan *Client
+	unregister         chan *Client
+	mutex              sync.Mutex
 }
 
 // NewServer creates a new WebSocket server.
@@ -55,24 +59,34 @@ func NewServer(
 	authProvider auth.Provider,
 	sessionMgr managers.SessionManager,
 	presenceMgr managers.PresenceManager,
+	maintenanceService *system.MaintenanceService,
 	logger *utils.Logger,
 ) *Server {
 	hub := NewHub(logger)
 	go hub.Run()
 
 	server := &Server{
-		hub:          hub,
-		router:       router,
-		authProvider: authProvider,
-		sessionMgr:   sessionMgr,
-		presenceMgr:  presenceMgr,
-		logger:       logger.Named("rpc_server"),
-		clients:      make(map[*Client]bool),
-		register:     make(chan *Client),
-		unregister:   make(chan *Client),
+		hub:                hub,
+		router:             router,
+		authProvider:       authProvider,
+		sessionMgr:         sessionMgr,
+		presenceMgr:        presenceMgr,
+		maintenanceService: maintenanceService,
+		logger:             logger.Named("rpc_server"),
+		clients:            make(map[*Client]bool),
+		register:           make(chan *Client),
+		unregister:         make(chan *Client),
 	}
 
+	// Run initial cleanup
+	if err := maintenanceService.PerformMaintenance(context.Background(), "stale_client_cleanup"); err != nil {
+		logger.Error("Failed to perform initial stale client cleanup", err)
+		// Continue anyway, periodic cleanup will catch any missed items
+	}
+
+	// Start server routines
 	go server.run()
+	go server.runPeriodicCleanup()
 
 	logger.Debug("RPC server started", "router", router)
 
@@ -92,10 +106,15 @@ func (s *Server) run() {
 		case client := <-s.unregister:
 			s.mutex.Lock()
 			if _, ok := s.clients[client]; ok {
+				// Clean up client's rooms and presence before removing
+				s.cleanupClientState(client)
+
+				// Remove from clients map and close channel
 				delete(s.clients, client)
-				client.markAsClosed() // Mark client as closed before closing the channel
+				client.markAsClosed()
 				close(client.send)
-				s.logger.Debug("Client unregistered", "id", client.ID, "userID", client.UserID)
+
+				s.logger.Debug("Client unregistered and cleaned up", "id", client.ID, "userID", client.UserID)
 			}
 			s.mutex.Unlock()
 		}
@@ -231,13 +250,124 @@ func (s *Server) GetClientCount() int {
 	return len(s.clients)
 }
 
+// cleanupClientState handles all cleanup when a client disconnects
+func (s *Server) cleanupClientState(client *Client) {
+	ctx := context.Background()
+
+	// Get all rooms the client is in
+	rooms := client.GetRooms()
+
+	// Leave each room and send notifications
+	for _, roomID := range rooms {
+		// Send leave notification before removing from room
+		client.LeaveRoom(roomID, EventUserLeftRoom, struct {
+			RoomID string `json:"roomId"`
+			UserID string `json:"userId"`
+		}{
+			RoomID: roomID,
+			UserID: client.UserID,
+		})
+
+		// Remove from hub's room tracking
+		s.hub.RemoveClientFromRoom(client, roomID)
+	}
+
+	// Clean up Redis presence
+	if client.UserID != "" {
+		userID, err := bson.ObjectIDFromHex(client.UserID)
+		if err != nil {
+			s.logger.Error("Failed to parse user ID during cleanup", err, "userID", client.UserID)
+		} else {
+			// Remove presence and set status to offline
+			if err := s.presenceMgr.RemovePresence(ctx, userID); err != nil {
+				s.logger.Error("Failed to remove presence during cleanup", err, "userID", client.UserID)
+			}
+		}
+	}
+}
+
+// cleanupStaleClients removes any stale client data from Redis and rooms
+func (s *Server) cleanupStaleClients(ctx context.Context) error {
+	// Get all online users from Redis
+	onlineUsers, err := s.presenceMgr.GetOnlineUsers(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get online users: %w", err)
+	}
+
+	s.logger.Info("Checking for stale clients", "onlineUsersCount", len(onlineUsers))
+
+	// Check each user's session and presence
+	for _, userIDStr := range onlineUsers {
+		// Get user's presence info
+		userID, err := bson.ObjectIDFromHex(userIDStr)
+		if err != nil {
+			s.logger.Error("Invalid user ID in Redis", err, "userId", userIDStr)
+			continue
+		}
+
+		presence, err := s.presenceMgr.GetPresence(ctx, userID)
+		if err != nil {
+			s.logger.Error("Failed to get presence info", err, "userId", userIDStr)
+			continue
+		}
+
+		// If user has a current room, clean it up
+		if presence != nil && presence.CurrentRoomID != "" {
+			// Validate room ID format
+			if _, err := bson.ObjectIDFromHex(presence.CurrentRoomID); err != nil {
+				s.logger.Error("Invalid room ID in presence", err, "roomId", presence.CurrentRoomID)
+			} else {
+				// Create temporary client for cleanup
+				tempClient := &Client{
+					ID:       fmt.Sprintf("cleanup-%s", userIDStr),
+					UserID:   userIDStr,
+					Username: presence.Username,
+					server:   s,
+					rooms:    map[string]bool{presence.CurrentRoomID: true},
+					logger:   s.logger.Named("cleanup"),
+				}
+
+				// Clean up the client's state
+				s.cleanupClientState(tempClient)
+			}
+		}
+
+		// Remove presence data
+		if err := s.presenceMgr.RemovePresence(ctx, userID); err != nil {
+			s.logger.Error("Failed to remove stale presence", err, "userId", userIDStr)
+		}
+	}
+
+	s.logger.Info("Stale client cleanup completed", "cleanedUsers", len(onlineUsers))
+	return nil
+}
+
+// runPeriodicCleanup runs periodic cleanup of stale clients
+func (s *Server) runPeriodicCleanup() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if err := s.cleanupStaleClients(context.Background()); err != nil {
+				s.logger.Error("Failed periodic stale client cleanup", err)
+			}
+		}
+	}
+}
+
 // Shutdown gracefully shuts down the server.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.logger.Info("Shutting down RPC server")
 
-	// Close all client connections
+	// Clean up and close all client connections
 	s.mutex.Lock()
 	for client := range s.clients {
+		// Clean up client state before closing
+		s.cleanupClientState(client)
+
+		// Close connection and remove from clients map
 		client.conn.Close()
 		delete(s.clients, client)
 	}

@@ -212,6 +212,7 @@ func main() {
 		authProvider,
 		*sessionMgr,
 		*presenceMgr,
+		maintenanceService,
 		logger,
 	)
 

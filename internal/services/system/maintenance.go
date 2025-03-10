@@ -110,6 +110,7 @@ func NewMaintenanceService(
 	s.RegisterTask("history_cleanup", config.MaintenanceInterval, s.CleanupHistory)
 	s.RegisterTask("database_optimization", 24*time.Hour, s.OptimizeDatabase)
 	s.RegisterTask("cache_cleanup", config.MaintenanceInterval, s.CleanupCache)
+	s.RegisterTask("stale_client_cleanup", 5*time.Minute, s.CleanupStaleClients)
 
 	return s
 }
@@ -437,6 +438,78 @@ func (s *MaintenanceService) OptimizeDatabase(ctx context.Context) error {
 	}
 
 	s.logger.Info("Database optimization completed successfully")
+	return nil
+}
+
+// CleanupStaleClients removes stale client data from Redis and rooms
+func (s *MaintenanceService) CleanupStaleClients(ctx context.Context) error {
+	s.logger.Info("Cleaning up stale clients")
+
+	// Get all online users from Redis
+	onlineUsers, err := s.redisClient.SMembers(ctx, "online:users")
+	if err != nil {
+		return fmt.Errorf("failed to get online users: %w", err)
+	}
+
+	s.logger.Info("Checking for stale clients", "onlineUsersCount", len(onlineUsers))
+
+	// Check each user's session and presence
+	for _, userIDStr := range onlineUsers {
+		// Get presence info
+		presenceKey := fmt.Sprintf("presence:%s", userIDStr)
+		exists, err := s.redisClient.Exists(ctx, presenceKey)
+		if err != nil {
+			s.logger.Error("Failed to check presence key", err, "userId", userIDStr)
+			continue
+		}
+
+		// If no presence info, remove from online users
+		if !exists {
+			if err := s.redisClient.SRem(ctx, "online:users", userIDStr); err != nil {
+				s.logger.Error("Failed to remove user from online users", err, "userId", userIDStr)
+			}
+			continue
+		}
+
+		// Get user's current room
+		roomKey := fmt.Sprintf("user:room:%s", userIDStr)
+		roomID, err := s.redisClient.Get(ctx, roomKey)
+		if err != nil && err.Error() != "redis: nil" {
+			s.logger.Error("Failed to get user room", err, "userId", userIDStr)
+			continue
+		}
+
+		// If user has a room, clean it up
+		if roomID != "" {
+			// Remove user from room
+			roomUsersKey := fmt.Sprintf("room:users:%s", roomID)
+			if err := s.redisClient.SRem(ctx, roomUsersKey, userIDStr); err != nil {
+				s.logger.Error("Failed to remove user from room", err, "userId", userIDStr, "roomId", roomID)
+			}
+
+			// Delete user's room key
+			if err := s.redisClient.Del(ctx, roomKey); err != nil {
+				s.logger.Error("Failed to delete user room key", err, "userId", userIDStr)
+			}
+
+			// Update room state
+			if err := s.redisClient.HDel(ctx, fmt.Sprintf("room:state:%s", roomID), "users"); err != nil {
+				s.logger.Error("Failed to update room state", err, "roomId", roomID)
+			}
+		}
+
+		// Remove presence info
+		if err := s.redisClient.Del(ctx, presenceKey); err != nil {
+			s.logger.Error("Failed to remove presence info", err, "userId", userIDStr)
+		}
+
+		// Remove from online users
+		if err := s.redisClient.SRem(ctx, "online:users", userIDStr); err != nil {
+			s.logger.Error("Failed to remove user from online users", err, "userId", userIDStr)
+		}
+	}
+
+	s.logger.Info("Stale client cleanup completed", "cleanedUsers", len(onlineUsers))
 	return nil
 }
 

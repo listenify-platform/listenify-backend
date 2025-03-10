@@ -463,20 +463,41 @@ func (m *Manager) IsUserInRoom(ctx context.Context, roomID, userID bson.ObjectID
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 
-	// Get room state
-	state, err := m.GetRoomState(ctx, roomID)
+	// First check Redis directly for room membership
+	inRoom, err := m.stateManager.IsUserInRoom(ctx, roomID.Hex(), userID.Hex())
 	if err != nil {
+		m.logger.Error("Failed to check room membership in Redis", err, "roomId", roomID.Hex(), "userId", userID.Hex())
 		return false, err
 	}
 
-	// Check if user is in room
-	for _, u := range state.Users {
-		if u.ID == userID {
-			return true, nil
-		}
+	if !inRoom {
+		return false, nil
 	}
 
-	return false, nil
+	// If user is in room, verify their presence status
+	presence, err := m.presenceManager.GetPresence(ctx, userID)
+	if err != nil {
+		// Log but don't fail the check just because we couldn't verify presence
+		m.logger.Error("Failed to get user presence", err, "userId", userID.Hex())
+		return true, nil
+	}
+
+	// If we can verify presence, ensure user is online
+	if presence != nil && presence.Status == "online" {
+		return true, nil
+	}
+
+	// User is in room but appears offline, schedule cleanup but still return true
+	go func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := m.cleanupUserPresence(cleanupCtx, userID); err != nil {
+			m.logger.Error("Failed to cleanup user presence", err, "userId", userID.Hex())
+		}
+	}()
+
+	return true, nil
 }
 
 // GetRoomUsers gets all users in a room.

@@ -234,7 +234,6 @@ func (h *Hub) broadcastToUser(userID string, message []byte) {
 
 // addClientToRoom adds a client to a room.
 func (h *Hub) addClientToRoom(client *Client, room string) {
-	h.logger.Debug("Adding client to room", "clientID", client.ID, "userID", client.UserID, "room", room)
 	h.mutex.Lock()
 
 	// Create room if it doesn't exist
@@ -255,7 +254,6 @@ func (h *Hub) addClientToRoom(client *Client, room string) {
 
 // removeClientFromRoom removes a client from a room.
 func (h *Hub) removeClientFromRoom(client *Client, room string) {
-	h.logger.Debug("Removing client from room", "clientID", client.ID, "userID", client.UserID, "room", room)
 	h.mutex.Lock()
 
 	// Remove client from room

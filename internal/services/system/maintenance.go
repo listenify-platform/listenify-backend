@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -62,6 +63,12 @@ func DefaultMaintenanceConfig() MaintenanceConfig {
 	}
 }
 
+// WebSocketServer interface defines methods needed for WebSocket connection verification
+type WebSocketServer interface {
+	IsUserConnected(userID string) bool
+	GetUserConnections(userID string) int
+}
+
 // MaintenanceService manages system maintenance tasks.
 type MaintenanceService struct {
 	config       MaintenanceConfig
@@ -78,6 +85,7 @@ type MaintenanceService struct {
 	stopCh       chan struct{}
 	wg           sync.WaitGroup
 	mu           sync.Mutex
+	wsServer     WebSocketServer // WebSocket server for connection verification
 }
 
 // NewMaintenanceService creates a new maintenance service.
@@ -244,10 +252,14 @@ func (s *MaintenanceService) Restart(ctx context.Context) error {
 
 // runDueTasks runs all maintenance tasks that are due.
 func (s *MaintenanceService) runDueTasks(ctx context.Context) {
+	// Create a timeout context for the entire operation
+	opCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer cancel()
+
+	// Get due tasks with minimal lock time
 	s.mu.Lock()
 	var dueTasks []*MaintenanceTask
 	now := time.Now()
-
 	for _, task := range s.tasks {
 		if now.Sub(task.LastRun) >= task.Interval {
 			dueTasks = append(dueTasks, task)
@@ -261,56 +273,99 @@ func (s *MaintenanceService) runDueTasks(ctx context.Context) {
 
 	s.logger.Info("Running due maintenance tasks", "count", len(dueTasks))
 
-	var wg sync.WaitGroup
-	semaphore := make(chan struct{}, s.config.MaxConcurrentTasks)
+	// Create channels for task coordination
+	taskCh := make(chan *MaintenanceTask, len(dueTasks))
 	errCh := make(chan error, len(dueTasks))
+	doneCh := make(chan struct{})
 
-	for _, task := range dueTasks {
+	// Start worker pool
+	var wg sync.WaitGroup
+	maxWorkers := s.config.MaxConcurrentTasks
+	if maxWorkers <= 0 {
+		maxWorkers = 3 // Default to 3 workers
+	}
+
+	// Start workers
+	for i := 0; i < maxWorkers; i++ {
 		wg.Add(1)
-		go func(t *MaintenanceTask) {
+		go func(workerID int) {
 			defer wg.Done()
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
+			for task := range taskCh {
+				// Create task-specific context
+				taskCtx, taskCancel := context.WithTimeout(opCtx, s.config.TaskTimeout)
 
-			// Create a timeout context for this task
-			taskCtx, cancel := context.WithTimeout(ctx, s.config.TaskTimeout)
-			defer cancel()
+				func() {
+					defer taskCancel()
+					defer func() {
+						if r := recover(); r != nil {
+							err := fmt.Errorf("panic in task %s (worker %d): %v", task.Name, workerID, r)
+							s.logger.Error("Task panic recovered", err, "name", task.Name, "worker", workerID)
+							errCh <- err
+						}
+					}()
 
-			// Add panic recovery for individual tasks
-			defer func() {
-				if r := recover(); r != nil {
-					err := fmt.Errorf("panic in task %s: %v", t.Name, r)
-					s.logger.Error("Task panic recovered", err, "name", t.Name)
-					errCh <- err
+					s.logger.Debug("Worker starting task", "worker", workerID, "task", task.Name)
+					if err := task.Fn(taskCtx); err != nil {
+						s.logger.Error("Task failed", err, "name", task.Name, "worker", workerID)
+						errCh <- fmt.Errorf("task %s failed (worker %d): %w", task.Name, workerID, err)
+						return
+					}
+
+					// Update LastRun with minimal lock time
+					s.mu.Lock()
+					task.LastRun = time.Now()
+					s.mu.Unlock()
+
+					s.logger.Debug("Worker completed task", "worker", workerID, "task", task.Name)
+				}()
+
+				// Check if context is done after each task
+				select {
+				case <-opCtx.Done():
+					s.logger.Warn("Worker stopping due to context done", "worker", workerID)
+					return
+				default:
 				}
-			}()
-
-			s.logger.Info("Running maintenance task", "name", t.Name)
-			if err := t.Fn(taskCtx); err != nil {
-				s.logger.Error("Failed to run maintenance task", err, "name", t.Name)
-				errCh <- fmt.Errorf("task %s failed: %w", t.Name, err)
-				return
 			}
-
-			s.mu.Lock()
-			t.LastRun = time.Now()
-			s.mu.Unlock()
-
-			s.logger.Info("Completed maintenance task", "name", t.Name)
-		}(task)
+		}(i)
 	}
 
-	wg.Wait()
-	close(errCh)
+	// Start completion monitor
+	go func() {
+		wg.Wait()
+		close(errCh)
+		close(doneCh)
+	}()
 
-	// Collect and log errors
-	var errs []error
-	for err := range errCh {
-		errs = append(errs, err)
-	}
+	// Send tasks to workers
+	go func() {
+		for _, task := range dueTasks {
+			select {
+			case <-opCtx.Done():
+				s.logger.Warn("Task distribution stopped due to context done")
+				close(taskCh)
+				return
+			case taskCh <- task:
+			}
+		}
+		close(taskCh)
+	}()
 
-	if len(errs) > 0 {
-		s.logger.Error("Some maintenance tasks failed", fmt.Errorf("multiple errors occurred"), "errorCount", len(errs))
+	// Wait for completion or timeout
+	select {
+	case <-opCtx.Done():
+		s.logger.Warn("Maintenance tasks timed out")
+		return
+	case <-doneCh:
+		// Collect errors
+		var errs []error
+		for err := range errCh {
+			errs = append(errs, err)
+		}
+		if len(errs) > 0 {
+			s.logger.Error("Some maintenance tasks failed", fmt.Errorf("multiple errors occurred"), "errorCount", len(errs))
+		}
+		s.logger.Info("All maintenance tasks completed", "successful", len(dueTasks)-len(errs), "failed", len(errs))
 	}
 }
 
@@ -445,77 +500,414 @@ func (s *MaintenanceService) OptimizeDatabase(ctx context.Context) error {
 	return nil
 }
 
+// SetWebSocketServer sets the WebSocket server for connection verification
+func (s *MaintenanceService) SetWebSocketServer(server WebSocketServer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.wsServer = server
+}
+
+// userCleanupTask represents a user cleanup task
+type userCleanupTask struct {
+	userID      string
+	presenceKey string
+	roomID      string
+}
+
 // CleanupStaleClients removes stale client data from Redis and rooms
 func (s *MaintenanceService) CleanupStaleClients(ctx context.Context) error {
-	s.logger.Info("Cleaning up stale clients")
+	// Create a new background context for the cleanup process
+	cleanupCtx := context.Background()
 
-	// Get all online users from Redis
-	onlineUsers, err := s.redisClient.SMembers(ctx, "online:users")
+	// Run cleanup in a non-blocking goroutine with error handling
+	go func() {
+		// Create a channel to track completion
+		done := make(chan struct{})
+		errCh := make(chan error, 1)
+
+		go func() {
+			if err := s.performAsyncCleanup(cleanupCtx); err != nil {
+				errCh <- err
+			}
+			close(done)
+		}()
+
+		// Wait for completion or parent context cancellation
+		select {
+		case <-ctx.Done():
+			s.logger.Debug("Parent context cancelled, cleanup will continue in background")
+		case err := <-errCh:
+			s.logger.Error("Async cleanup failed", err)
+		case <-done:
+			s.logger.Debug("Cleanup completed successfully")
+		}
+	}()
+	return nil
+}
+
+// performAsyncCleanup handles the actual cleanup process asynchronously
+func (s *MaintenanceService) performAsyncCleanup(ctx context.Context) error {
+	// Quick check for WebSocket server without lock
+	if s.wsServer == nil {
+		s.logger.Debug("WebSocket server not initialized, deferring cleanup")
+		return nil
+	}
+
+	// Create a short timeout context for the operation
+	opCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	s.logger.Info("Starting async stale client cleanup")
+
+	// Get online users with retries
+	var onlineUsers []string
+	var err error
+	for retries := 0; retries < 3; retries++ {
+		listCtx, listCancel := context.WithTimeout(opCtx, 2*time.Second)
+		onlineUsers, err = s.redisClient.SMembers(listCtx, "online:users")
+		listCancel()
+
+		if err == nil {
+			break
+		}
+
+		if retries < 2 {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+
+		if ctx.Err() == context.DeadlineExceeded {
+			s.logger.Warn("Timeout while fetching online users, will retry next cycle")
+			return nil
+		}
+		return fmt.Errorf("failed to get online users after retries: %w", err)
+	}
+
+	// If we can't get the list, log and return - better to retry next cycle
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			s.logger.Warn("Timeout while fetching online users, will retry next cycle")
+			return nil
+		}
 		return fmt.Errorf("failed to get online users: %w", err)
+	}
+
+	if len(onlineUsers) == 0 {
+		return nil
 	}
 
 	s.logger.Info("Checking for stale clients", "onlineUsersCount", len(onlineUsers))
 
-	// Check each user's session and presence
-	for _, userIDStr := range onlineUsers {
-		// Get presence info
-		presenceKey := fmt.Sprintf("presence:%s", userIDStr)
-		exists, err := s.redisClient.Exists(ctx, presenceKey)
+	// Create channels for task coordination
+	taskCh := make(chan userCleanupTask, len(onlineUsers))
+	errCh := make(chan error, len(onlineUsers))
+	doneCh := make(chan struct{})
+
+	// Start worker pool
+	var wg sync.WaitGroup
+	maxWorkers := s.config.MaxConcurrentTasks
+	if maxWorkers <= 0 {
+		maxWorkers = 3
+	}
+
+	// Get WebSocket server reference once
+	s.mu.Lock()
+	ws := s.wsServer
+	s.mu.Unlock()
+
+	// Double check after getting reference
+	if ws == nil {
+		s.logger.Debug("WebSocket server became unavailable, deferring cleanup")
+		return nil
+	}
+
+	// Start workers
+	for i := 0; i < maxWorkers; i++ {
+		wg.Add(1)
+		go func(workerID int, ws WebSocketServer) {
+			defer wg.Done()
+			for task := range taskCh {
+				// Use shorter timeout for individual tasks
+				taskCtx, taskCancel := context.WithTimeout(opCtx, 5*time.Second)
+
+				func() {
+					defer taskCancel()
+					defer func() {
+						if r := recover(); r != nil {
+							err := fmt.Errorf("panic in cleanup task (worker %d): %v", workerID, r)
+							s.logger.Error("Task panic recovered", err, "worker", workerID)
+							errCh <- err
+						}
+					}()
+
+					// Quick check if user is still connected
+					if ws.IsUserConnected(task.userID) {
+						s.logger.Debug("User has active connection, skipping", "userId", task.userID, "worker", workerID)
+						return
+					}
+
+					// Process cleanup in batches with timeouts
+					if err := s.processUserCleanup(taskCtx, ws, task); err != nil {
+						errCh <- fmt.Errorf("failed to cleanup user (worker %d): %w", workerID, err)
+					}
+				}()
+
+				// Check context after each task
+				select {
+				case <-opCtx.Done():
+					s.logger.Warn("Worker stopping due to context done", "worker", workerID)
+					return
+				default:
+				}
+			}
+		}(i, ws)
+	}
+
+	// Start completion monitor
+	go func() {
+		wg.Wait()
+		close(errCh)
+		close(doneCh)
+	}()
+
+	// Prepare and send tasks
+	go func() {
+		// Process users in very small batches to prevent blocking
+		batchSize := 5
+		for i := 0; i < len(onlineUsers); i += batchSize {
+			end := i + batchSize
+			if end > len(onlineUsers) {
+				end = len(onlineUsers)
+			}
+
+			// Process batch
+			for _, userID := range onlineUsers[i:end] {
+				presenceKey := fmt.Sprintf("presence:%s", userID)
+				roomKey := fmt.Sprintf("user:room:%s", userID)
+
+				// Get room ID with minimal timeout
+				roomCtx, roomCancel := context.WithTimeout(opCtx, 500*time.Millisecond)
+				roomID, err := s.redisClient.Get(roomCtx, roomKey)
+				roomCancel()
+
+				// Skip if operation takes too long
+				if ctx.Err() == context.DeadlineExceeded {
+					s.logger.Debug("Room lookup timed out, skipping", "userId", userID)
+					continue
+				}
+
+				// Skip if we can't get room info due to timeout
+				if err != nil && err.Error() != "redis: nil" && ctx.Err() == context.DeadlineExceeded {
+					s.logger.Warn("Skipping user due to room lookup timeout", "userId", userID)
+					continue
+				}
+
+				if err != nil && err.Error() != "redis: nil" {
+					s.logger.Error("Failed to get user room", err, "userId", userID)
+					continue
+				}
+
+				task := userCleanupTask{
+					userID:      userID,
+					presenceKey: presenceKey,
+					roomID:      roomID,
+				}
+
+				select {
+				case <-opCtx.Done():
+					s.logger.Warn("Task distribution stopped due to context done")
+					close(taskCh)
+					return
+				case taskCh <- task:
+				}
+			}
+		}
+		close(taskCh)
+	}()
+
+	// Wait for completion or timeout
+	select {
+	case <-opCtx.Done():
+		s.logger.Warn("Stale client cleanup timed out")
+		return fmt.Errorf("cleanup timed out")
+	case <-doneCh:
+		// Collect errors
+		var errs []error
+		for err := range errCh {
+			errs = append(errs, err)
+		}
+		if len(errs) > 0 {
+			s.logger.Error("Some cleanup tasks failed", fmt.Errorf("multiple errors occurred"), "errorCount", len(errs))
+		}
+		s.logger.Info("Stale client cleanup completed", "checkedUsers", len(onlineUsers), "errors", len(errs))
+		return nil
+	}
+}
+
+// processUserCleanup handles the cleanup of a single user
+func (s *MaintenanceService) processUserCleanup(ctx context.Context, wsServer WebSocketServer, task userCleanupTask) error {
+	// Check if user is connected
+	if wsServer.IsUserConnected(task.userID) {
+		// User is connected, remove any disconnect timestamp if it exists
+		disconnectKey := fmt.Sprintf("disconnect:%s", task.userID)
+		if err := s.redisClient.Del(ctx, disconnectKey); err != nil {
+			s.logger.Error("Failed to remove disconnect timestamp", err, "userId", task.userID)
+		}
+		return nil
+	}
+
+	// Get or set disconnect timestamp
+	disconnectKey := fmt.Sprintf("disconnect:%s", task.userID)
+	disconnectTime, err := s.redisClient.Get(ctx, disconnectKey)
+	if err != nil {
+		if err.Error() == "redis: nil" {
+			// First time seeing this disconnected user, set timestamp
+			now := time.Now().Unix()
+			if err := s.redisClient.Set(ctx, disconnectKey, strconv.FormatInt(now, 10), 24*time.Hour); err != nil {
+				s.logger.Error("Failed to set disconnect timestamp", err, "userId", task.userID)
+			}
+			return nil // Wait for grace period before cleanup
+		}
+		return fmt.Errorf("failed to get disconnect timestamp: %w", err)
+	}
+
+	// Parse disconnect timestamp
+	timestamp, err := strconv.ParseInt(disconnectTime, 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid disconnect timestamp: %w", err)
+	}
+
+	// Check if grace period (30 seconds) has elapsed
+	if time.Since(time.Unix(timestamp, 0)) < 30*time.Second {
+		return nil // Still within grace period
+	}
+
+	// Double check connection status after grace period
+	if wsServer.IsUserConnected(task.userID) {
+		if err := s.redisClient.Del(ctx, disconnectKey); err != nil {
+			s.logger.Error("Failed to remove disconnect timestamp", err, "userId", task.userID)
+		}
+		return nil
+	}
+
+	// Generate state key for cleanup coordination
+	var stateKey string
+	if task.roomID != "" {
+		userID, err := bson.ObjectIDFromHex(task.userID)
 		if err != nil {
-			s.logger.Error("Failed to check presence key", err, "userId", userIDStr)
-			continue
+			return fmt.Errorf("invalid user ID: %w", err)
 		}
 
-		// If no presence info, remove from online users
-		if !exists {
-			if err := s.redisClient.SRem(ctx, "online:users", userIDStr); err != nil {
-				s.logger.Error("Failed to remove user from online users", err, "userId", userIDStr)
+		roomID, err := bson.ObjectIDFromHex(task.roomID)
+		if err != nil {
+			return fmt.Errorf("invalid room ID: %w", err)
+		}
+
+		// Final connection check before room cleanup
+		if wsServer.IsUserConnected(task.userID) {
+			if err := s.redisClient.Del(ctx, disconnectKey); err != nil {
+				s.logger.Error("Failed to remove disconnect timestamp", err, "userId", task.userID)
 			}
-			continue
+			return nil
 		}
 
-		// Get user's current room
-		roomKey := fmt.Sprintf("user:room:%s", userIDStr)
-		roomID, err := s.redisClient.Get(ctx, roomKey)
-		if err != nil && err.Error() != "redis: nil" {
-			s.logger.Error("Failed to get user room", err, "userId", userIDStr)
-			continue
+		// Set state key for room cleanup
+		stateKey = fmt.Sprintf("room:state:%s:%s", roomID, task.userID)
+
+		// Check if we're already handling this room cleanup
+		stateCtx, stateCancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		hasState, err := s.redisClient.Exists(stateCtx, stateKey)
+		stateCancel()
+
+		if err == nil && hasState {
+			s.logger.Debug("Room cleanup already in progress",
+				"userId", task.userID,
+				"roomId", task.roomID)
+			return nil
 		}
 
-		// If user has a room, clean it up using room manager
-		if roomID != "" {
-			// Convert IDs to ObjectIDs
-			userID, err := bson.ObjectIDFromHex(userIDStr)
-			if err != nil {
-				s.logger.Error("Invalid user ID", err, "userId", userIDStr)
+		// Set cleanup state with expiration
+		stateCtx, stateCancel = context.WithTimeout(ctx, 500*time.Millisecond)
+		err = s.redisClient.Set(stateCtx, stateKey, "cleaning", 30*time.Second)
+		stateCancel()
+
+		if err != nil {
+			s.logger.Error("Failed to set cleanup state", err,
+				"userId", task.userID,
+				"roomId", task.roomID)
+		}
+
+		// Perform room cleanup with retries
+		var cleanupErr error
+		for retries := 0; retries < 3; retries++ {
+			if wsServer.IsUserConnected(task.userID) {
+				s.logger.Debug("User reconnected during cleanup",
+					"userId", task.userID,
+					"roomId", task.roomID)
+
+				// Clear cleanup state
+				if err := s.redisClient.Del(ctx, stateKey); err != nil {
+					s.logger.Error("Failed to clear cleanup state", err,
+						"userId", task.userID,
+						"roomId", task.roomID)
+				}
+				return nil
+			}
+
+			roomCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
+			err := s.roomManager.LeaveRoom(roomCtx, roomID, userID)
+			cancel()
+
+			if err == nil {
+				cleanupErr = nil
+				break
+			}
+
+			cleanupErr = err
+			if retries < 2 {
+				time.Sleep(100 * time.Millisecond)
 				continue
 			}
-
-			roomObjID, err := bson.ObjectIDFromHex(roomID)
-			if err != nil {
-				s.logger.Error("Invalid room ID", err, "roomId", roomID)
-				continue
-			}
-
-			// Use room manager to properly handle leave
-			if err := s.roomManager.LeaveRoom(ctx, roomObjID, userID); err != nil {
-				s.logger.Error("Failed to remove user from room", err, "userId", userIDStr, "roomId", roomID)
-			}
 		}
 
-		// Remove presence info
-		if err := s.redisClient.Del(ctx, presenceKey); err != nil {
-			s.logger.Error("Failed to remove presence info", err, "userId", userIDStr)
-		}
-
-		// Remove from online users
-		if err := s.redisClient.SRem(ctx, "online:users", userIDStr); err != nil {
-			s.logger.Error("Failed to remove user from online users", err, "userId", userIDStr)
+		if cleanupErr != nil {
+			s.logger.Error("Failed to remove user from room",
+				cleanupErr,
+				"userId", task.userID,
+				"roomId", task.roomID)
+			return cleanupErr
 		}
 	}
 
-	s.logger.Info("Stale client cleanup completed", "cleanedUsers", len(onlineUsers))
+	// Final verification before cleanup
+	if wsServer.IsUserConnected(task.userID) {
+		if err := s.redisClient.Del(ctx, disconnectKey); err != nil {
+			s.logger.Error("Failed to remove disconnect timestamp", err, "userId", task.userID)
+		}
+		return nil
+	}
+
+	// Clean up Redis state with proper state key handling
+	redisCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
+	pipe := s.redisClient.Pipeline()
+	pipe.Del(redisCtx, task.presenceKey)
+	pipe.Del(redisCtx, disconnectKey)
+	if stateKey != "" {
+		pipe.Del(redisCtx, stateKey)
+	}
+	pipe.SRem(redisCtx, "online:users", task.userID)
+
+	_, err = pipe.Exec(redisCtx)
+	cancel()
+
+	if err != nil {
+		s.logger.Error("Failed to cleanup Redis state",
+			err,
+			"userId", task.userID)
+		return fmt.Errorf("failed to cleanup Redis state: %w", err)
+	}
+
+	s.logger.Info("Cleaned up disconnected user after grace period", "userId", task.userID)
 	return nil
 }
 

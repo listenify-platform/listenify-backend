@@ -3,7 +3,6 @@ package rpc
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"sync"
 	"time"
@@ -79,31 +78,38 @@ func (c *Client) isConnected() bool {
 }
 
 // disconnect marks the client as disconnected and ensures proper cleanup.
-func (c *Client) disconnect() {
+func (c *Client) disconnect(closeCode int) {
 	c.mutex.Lock()
 	if !c.connected {
 		c.mutex.Unlock()
 		return
 	}
+	c.mutex.Unlock()
+
+	// Handle normal closures properly
+	if closeCode == websocket.CloseNormalClosure || closeCode == websocket.CloseGoingAway {
+		c.logger.Debug("Normal client disconnection", "userId", c.UserID, "code", closeCode)
+	} else {
+		c.logger.Debug("Unexpected client disconnection", "userId", c.UserID, "code", closeCode)
+	}
+
+	// Perform cleanup without waiting
+	c.performCleanup()
+}
+
+// performCleanup handles the actual cleanup of client resources
+func (c *Client) performCleanup() {
+	// Let server handle cleanup (it checks for other connections)
+	c.server.cleanupClientState(c)
+
+	// Mark as disconnected ONLY AFTER all cleanups are complete
+	// This ensures responses can still be sent until the very end
+	c.mutex.Lock()
 	c.connected = false
 	c.mutex.Unlock()
 
-	// Create context with timeout for cleanup operations
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	// Only cleanup if client is still connected
-	if c.isConnected() {
-		c.server.cleanupClientState(c)
-	}
-
 	// Close the done channel to signal disconnection
 	close(c.done)
-
-	// Trigger maintenance cleanup to catch any edge cases
-	if err := c.server.maintenanceService.CleanupStaleClients(ctx); err != nil {
-		c.logger.Error("Failed to run maintenance cleanup during disconnect", err)
-	}
 
 	c.logger.Info("Client disconnected and cleaned up", "userId", c.UserID)
 }
@@ -139,9 +145,15 @@ func (c *Client) markAsClosed() {
 
 // readPump pumps messages from the WebSocket connection to the hub.
 func (c *Client) readPump() {
+	var closeErr error
 	defer func() {
+		closeCode := websocket.CloseNoStatusReceived
+		if closeErr != nil && websocket.IsCloseError(closeErr, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+			closeCode = websocket.CloseNormalClosure
+		}
+
 		// Ensure cleanup happens before unregistering
-		c.disconnect()
+		c.disconnect(closeCode)
 		c.server.unregister <- c
 		c.conn.Close()
 	}()
@@ -157,12 +169,23 @@ func (c *Client) readPump() {
 	})
 
 	for {
-		_, message, err := c.conn.ReadMessage()
+		messageType, message, err := c.conn.ReadMessage()
 		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+			closeErr = err
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				c.logger.Debug("Normal closure", "code", websocket.CloseNormalClosure)
+				return
+			}
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseAbnormalClosure) {
 				c.logger.Error("Unexpected close error", err)
 			}
 			break
+		}
+
+		if messageType == websocket.CloseMessage {
+			c.logger.Debug("Received close message")
+			closeErr = websocket.ErrCloseSent
+			return
 		}
 
 		message = bytes.TrimSpace(bytes.Replace(message, []byte{'\n'}, []byte{' '}, -1))
@@ -176,7 +199,7 @@ func (c *Client) writePump() {
 	defer func() {
 		ticker.Stop()
 		// Ensure cleanup happens before unregistering
-		c.disconnect()
+		c.disconnect(websocket.CloseGoingAway)
 		c.server.unregister <- c
 		c.conn.Close()
 	}()
@@ -307,13 +330,19 @@ func (c *Client) sendRoomMsg(roomID string, notify *Notification) {
 
 // JoinRoom adds the client to a room.
 func (c *Client) JoinRoom(roomID string, method string, params any) {
+	// Update local state first
 	c.rooms[roomID] = true
+
+	// Add to server room registry before sending notifications
+	c.server.AddClientToRoom(c, roomID)
+
+	// Send notification after client is fully registered in the room
 	c.sendRoomMsg(roomID, &Notification{
 		JSONRPC: "2.0",
 		Method:  method,
 		Params:  params,
 	})
-	c.server.AddClientToRoom(c, roomID)
+
 	c.logger.Debug("Client joined room", "clientID", c.ID, "roomID", roomID)
 }
 
@@ -331,14 +360,6 @@ func (c *Client) LeaveRoom(roomID string, method string, params any) {
 
 	// Remove from server and update room state
 	c.server.RemoveClientFromRoom(c, roomID)
-
-	// Run cleanup to ensure Redis state is updated
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := c.server.maintenanceService.CleanupStaleClients(ctx); err != nil {
-		c.logger.Error("Failed to cleanup after leaving room", err, "roomID", roomID)
-	}
 
 	c.logger.Debug("Client left room", "clientID", c.ID, "roomID", roomID)
 }

@@ -78,6 +78,9 @@ func NewServer(
 		unregister:         make(chan *Client),
 	}
 
+	// Set this server as the WebSocket server for the maintenance service
+	maintenanceService.SetWebSocketServer(server)
+
 	// Run initial cleanup
 	if err := maintenanceService.PerformMaintenance(context.Background(), "stale_client_cleanup"); err != nil {
 		logger.Error("Failed to perform initial stale client cleanup", err)
@@ -241,30 +244,76 @@ func (s *Server) GetClientCount() int {
 	return len(s.clients)
 }
 
+// IsUserConnected checks if a user has any active WebSocket connections.
+func (s *Server) IsUserConnected(userID string) bool {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	for client := range s.clients {
+		if client.UserID == userID && client.isConnected() {
+			return true
+		}
+	}
+	return false
+}
+
+// GetUserConnections returns the number of active connections for a user.
+func (s *Server) GetUserConnections(userID string) int {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	count := 0
+	for client := range s.clients {
+		if client.UserID == userID && client.isConnected() {
+			count++
+		}
+	}
+	return count
+}
+
 // cleanupClientState handles all cleanup when a client disconnects
 func (s *Server) cleanupClientState(client *Client) {
 	ctx := context.Background()
 
+	// Check if user is still connected through other clients
+	userStillConnected := false
+	if client.UserID != "" {
+		// Skip room cleanup if user is connected through other clients
+		userStillConnected = s.GetUserConnections(client.UserID) > 0
+	}
+
 	// Get all rooms the client is in
 	rooms := client.GetRooms()
 
-	// Leave each room and send notifications
-	for _, roomID := range rooms {
-		// Send leave notification before removing from room
-		client.LeaveRoom(roomID, EventUserLeftRoom, struct {
-			RoomID string `json:"roomId"`
-			UserID string `json:"userId"`
-		}{
-			RoomID: roomID,
-			UserID: client.UserID,
-		})
+	if len(rooms) > 0 {
+		if userStillConnected {
+			s.logger.Debug("User has other active connections, preserving room state",
+				"userId", client.UserID, "clientId", client.ID)
 
-		// Remove from hub's room tracking
-		s.hub.RemoveClientFromRoom(client, roomID)
+			// Just remove client from hub tracking without triggering leave events
+			for _, roomID := range rooms {
+				s.hub.RemoveClientFromRoom(client, roomID)
+			}
+		} else {
+			// User is fully disconnected, perform complete cleanup
+			for _, roomID := range rooms {
+				// Send leave notification before removing from room
+				client.LeaveRoom(roomID, EventUserLeftRoom, struct {
+					RoomID string `json:"roomId"`
+					UserID string `json:"userId"`
+				}{
+					RoomID: roomID,
+					UserID: client.UserID,
+				})
+
+				// Remove from hub's room tracking
+				s.hub.RemoveClientFromRoom(client, roomID)
+			}
+		}
 	}
 
-	// Clean up Redis presence
-	if client.UserID != "" {
+	// Clean up Redis presence only if user is completely disconnected
+	if client.UserID != "" && !userStillConnected {
 		userID, err := bson.ObjectIDFromHex(client.UserID)
 		if err != nil {
 			s.logger.Error("Failed to parse user ID during cleanup", err, "userID", client.UserID)

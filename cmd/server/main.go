@@ -232,11 +232,6 @@ func main() {
 		logger,
 	)
 
-	// Start maintenance service
-	if err := maintenanceService.Start(ctx); err != nil {
-		logger.Error("Failed to start maintenance service", err)
-	}
-
 	// Start health service
 	healthService.Start(ctx)
 
@@ -249,7 +244,11 @@ func main() {
 		WriteTimeout: cfg.Server.WriteTimeout,
 		IdleTimeout:  cfg.Server.IdleTimeout,
 	}
-
+	// Now that RPC server is ready, set it in maintenance service and start maintenance
+	maintenanceService.SetWebSocketServer(rpcServer)
+	if err := maintenanceService.Start(ctx); err != nil {
+		logger.Error("Failed to start maintenance service", err)
+	}
 	// Create a separate HTTP server for WebSocket connections on a different port
 	// This avoids middleware that might interfere with WebSocket upgrades
 	wsPort := cfg.Server.Port + 1

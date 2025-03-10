@@ -3,6 +3,7 @@ package rpc
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"sync"
 	"time"
@@ -42,6 +43,69 @@ type Client struct {
 
 	// closed indicates whether the send channel has been closed
 	closed bool
+
+	// connected indicates whether the client is currently connected
+	connected bool
+
+	// lastPing is the timestamp of the last ping received
+	lastPing time.Time
+
+	// done is a channel that is closed when the client is disconnected
+	done chan struct{}
+}
+
+// NewClient creates a new client.
+func NewClient(id, userID, username string, server *Server, conn *websocket.Conn, logger *utils.Logger) *Client {
+	return &Client{
+		ID:        id,
+		UserID:    userID,
+		Username:  username,
+		server:    server,
+		conn:      conn,
+		send:      make(chan []byte, 64),
+		rooms:     make(map[string]bool),
+		logger:    logger,
+		connected: true,
+		lastPing:  time.Now(),
+		done:      make(chan struct{}),
+	}
+}
+
+// isConnected returns whether the client is currently connected.
+func (c *Client) isConnected() bool {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+	return c.connected && !c.closed && time.Since(c.lastPing) < pongWait
+}
+
+// disconnect marks the client as disconnected and ensures proper cleanup.
+func (c *Client) disconnect() {
+	c.mutex.Lock()
+	if !c.connected {
+		c.mutex.Unlock()
+		return
+	}
+	c.connected = false
+	c.mutex.Unlock()
+
+	// Create context with timeout for cleanup operations
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Only cleanup if client is still connected
+	if c.isConnected() {
+		c.server.cleanupClientState(c)
+	}
+
+	// Close the done channel to signal disconnection
+	close(c.done)
+
+	// Trigger maintenance cleanup to catch any edge cases
+	if err := c.server.maintenanceService.CleanupStaleClients(ctx); err != nil {
+		c.logger.Error("Failed to run maintenance cleanup during disconnect", err)
+	}
+
+	c.logger.Info("Client disconnected and cleaned up", "userId", c.UserID)
 }
 
 // safelySendMessage sends a message only if the channel isn't closed
@@ -76,6 +140,8 @@ func (c *Client) markAsClosed() {
 // readPump pumps messages from the WebSocket connection to the hub.
 func (c *Client) readPump() {
 	defer func() {
+		// Ensure cleanup happens before unregistering
+		c.disconnect()
 		c.server.unregister <- c
 		c.conn.Close()
 	}()
@@ -83,6 +149,9 @@ func (c *Client) readPump() {
 	c.conn.SetReadLimit(maxMessageSize)
 	c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	c.conn.SetPongHandler(func(string) error {
+		c.mutex.Lock()
+		c.lastPing = time.Now()
+		c.mutex.Unlock()
 		c.conn.SetReadDeadline(time.Now().Add(pongWait))
 		return nil
 	})
@@ -106,9 +175,10 @@ func (c *Client) writePump() {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		ticker.Stop()
-		c.conn.Close()
-		// Ensure client is unregistered if writePump exits
+		// Ensure cleanup happens before unregistering
+		c.disconnect()
 		c.server.unregister <- c
+		c.conn.Close()
 	}()
 
 	for {
@@ -161,8 +231,8 @@ func (c *Client) handleMessage(message []byte) {
 	// Route the request to the appropriate handler
 	response := c.server.router.Route(c, &request)
 
-	// Send the response
-	if response != nil {
+	// Only send response if client is still connected
+	if response != nil && c.isConnected() {
 		responseJSON, err := json.Marshal(response)
 		if err != nil {
 			c.logger.Error("Failed to marshal response", err, "response", response)
@@ -249,13 +319,27 @@ func (c *Client) JoinRoom(roomID string, method string, params any) {
 
 // LeaveRoom removes the client from a room.
 func (c *Client) LeaveRoom(roomID string, method string, params any) {
+	// Remove from local state first
 	delete(c.rooms, roomID)
+
+	// Send leave notification before removing from server
 	c.sendRoomMsg(roomID, &Notification{
 		JSONRPC: "2.0",
 		Method:  method,
 		Params:  params,
 	})
+
+	// Remove from server and update room state
 	c.server.RemoveClientFromRoom(c, roomID)
+
+	// Run cleanup to ensure Redis state is updated
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := c.server.maintenanceService.CleanupStaleClients(ctx); err != nil {
+		c.logger.Error("Failed to cleanup after leaving room", err, "roomID", roomID)
+	}
+
 	c.logger.Debug("Client left room", "clientID", c.ID, "roomID", roomID)
 }
 

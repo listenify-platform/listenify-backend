@@ -187,6 +187,7 @@ func main() {
 		mediaRepo,
 		playlistRepo,
 		userRepo,
+		roomManager,
 		logger,
 	)
 

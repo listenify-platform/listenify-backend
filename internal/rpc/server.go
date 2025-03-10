@@ -186,16 +186,7 @@ func (s *Server) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := &Client{
-		ID:       clientID,
-		UserID:   claims.UserID,
-		Username: claims.Username,
-		server:   s,
-		conn:     conn,
-		send:     make(chan []byte, 64),
-		rooms:    make(map[string]bool),
-		logger:   s.logger.Named("client"),
-	}
+	client := NewClient(clientID, claims.UserID, claims.Username, s, conn, s.logger.Named("client"))
 
 	// Register client
 	s.register <- client

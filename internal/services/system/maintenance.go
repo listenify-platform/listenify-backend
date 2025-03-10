@@ -13,6 +13,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"norelock.dev/listenify/backend/internal/db/mongo/repositories"
 	"norelock.dev/listenify/backend/internal/db/redis"
+	"norelock.dev/listenify/backend/internal/services/room"
 	"norelock.dev/listenify/backend/internal/utils"
 )
 
@@ -71,6 +72,7 @@ type MaintenanceService struct {
 	mediaRepo    repositories.MediaRepository
 	playlistRepo repositories.PlaylistRepository
 	userRepo     repositories.UserRepository
+	roomManager  room.RoomManager
 	logger       *utils.Logger
 	tasks        []*MaintenanceTask
 	stopCh       chan struct{}
@@ -88,6 +90,7 @@ func NewMaintenanceService(
 	mediaRepo repositories.MediaRepository,
 	playlistRepo repositories.PlaylistRepository,
 	userRepo repositories.UserRepository,
+	roomManager room.RoomManager,
 	logger *utils.Logger,
 ) *MaintenanceService {
 	s := &MaintenanceService{
@@ -99,6 +102,7 @@ func NewMaintenanceService(
 		mediaRepo:    mediaRepo,
 		playlistRepo: playlistRepo,
 		userRepo:     userRepo,
+		roomManager:  roomManager,
 		logger:       logger,
 		stopCh:       make(chan struct{}),
 		tasks:        make([]*MaintenanceTask, 0),
@@ -479,22 +483,24 @@ func (s *MaintenanceService) CleanupStaleClients(ctx context.Context) error {
 			continue
 		}
 
-		// If user has a room, clean it up
+		// If user has a room, clean it up using room manager
 		if roomID != "" {
-			// Remove user from room
-			roomUsersKey := fmt.Sprintf("room:users:%s", roomID)
-			if err := s.redisClient.SRem(ctx, roomUsersKey, userIDStr); err != nil {
+			// Convert IDs to ObjectIDs
+			userID, err := bson.ObjectIDFromHex(userIDStr)
+			if err != nil {
+				s.logger.Error("Invalid user ID", err, "userId", userIDStr)
+				continue
+			}
+
+			roomObjID, err := bson.ObjectIDFromHex(roomID)
+			if err != nil {
+				s.logger.Error("Invalid room ID", err, "roomId", roomID)
+				continue
+			}
+
+			// Use room manager to properly handle leave
+			if err := s.roomManager.LeaveRoom(ctx, roomObjID, userID); err != nil {
 				s.logger.Error("Failed to remove user from room", err, "userId", userIDStr, "roomId", roomID)
-			}
-
-			// Delete user's room key
-			if err := s.redisClient.Del(ctx, roomKey); err != nil {
-				s.logger.Error("Failed to delete user room key", err, "userId", userIDStr)
-			}
-
-			// Update room state
-			if err := s.redisClient.HDel(ctx, fmt.Sprintf("room:state:%s", roomID), "users"); err != nil {
-				s.logger.Error("Failed to update room state", err, "roomId", roomID)
 			}
 		}
 

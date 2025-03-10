@@ -9,6 +9,7 @@ import (
 	"time"
 
 	r "github.com/go-redis/redis/v8"
+	"go.mongodb.org/mongo-driver/v2/bson"
 	"norelock.dev/listenify/backend/internal/db/redis"
 )
 
@@ -233,19 +234,28 @@ func (m *RoomStateManager) SetRoomActive(ctx context.Context, roomID string, isA
 	return nil
 }
 
-// AddUserToRoom adds a user to a room
+// AddUserToRoom adds a user to a room with proper presence synchronization
 func (m *RoomStateManager) AddUserToRoom(ctx context.Context, roomID, userID string) error {
 	logger := m.client.Logger()
 
+	// Use pipeline for atomic operations
+	pipe := m.client.Pipeline()
+
 	// Add user to room users set
 	usersKey := formatRoomUsersKey(roomID)
-	err := m.client.SAdd(ctx, usersKey, userID)
+	pipe.SAdd(ctx, usersKey, userID)
+
+	// Set room expiry
+	pipe.Expire(ctx, usersKey, RoomStateExpiry)
+
+	// Execute pipeline
+	_, err := pipe.Exec(ctx)
 	if err != nil {
 		logger.Error("Failed to add user to room", err, "roomId", roomID, "userId", userID)
 		return err
 	}
 
-	// Update active users count in room state
+	// Get or initialize room state
 	state, err := m.GetRoomState(ctx, roomID)
 	if err != nil {
 		return err
@@ -270,30 +280,55 @@ func (m *RoomStateManager) AddUserToRoom(ctx context.Context, roomID, userID str
 		return err
 	}
 
-	// Update state with new user count
+	// Update state with new user count and ensure it's active
 	state.ActiveUsers = int(userCount)
+	state.IsActive = true
+	state.LastActivity = time.Now()
+
+	// Store updated state
 	err = m.UpdateRoomState(ctx, state)
 	if err != nil {
 		return err
 	}
 
-	logger.Info("Added user to room", "roomId", roomID, "userId", userID, "activeUsers", userCount)
+	// Update user's presence with current room
+	userObjID, err := bson.ObjectIDFromHex(userID)
+	if err != nil {
+		logger.Error("Failed to parse user ID", err, "userId", userID)
+		return err
+	}
+
+	// Update presence (this will handle presence TTL and online status)
+	presenceMgr := NewPresenceManager(m.client)
+	err = presenceMgr.SetUserRoom(ctx, userObjID, roomID)
+	if err != nil {
+		logger.Error("Failed to update user presence", err, "userId", userID, "roomId", roomID)
+		// Continue anyway as the user is in the room
+	}
+
+	logger.Info("Added user to room with presence sync", "roomId", roomID, "userId", userID, "activeUsers", userCount)
 	return nil
 }
 
-// RemoveUserFromRoom removes a user from a room
+// RemoveUserFromRoom removes a user from a room with proper presence cleanup
 func (m *RoomStateManager) RemoveUserFromRoom(ctx context.Context, roomID, userID string) error {
 	logger := m.client.Logger()
 
+	// Use pipeline for atomic operations
+	pipe := m.client.Pipeline()
+
 	// Remove user from room users set
 	usersKey := formatRoomUsersKey(roomID)
-	err := m.client.SRem(ctx, usersKey, userID)
+	pipe.SRem(ctx, usersKey, userID)
+
+	// Execute pipeline
+	_, err := pipe.Exec(ctx)
 	if err != nil {
 		logger.Error("Failed to remove user from room", err, "roomId", roomID, "userId", userID)
 		return err
 	}
 
-	// Update active users count in room state
+	// Get current room state
 	state, err := m.GetRoomState(ctx, roomID)
 	if err != nil {
 		return err
@@ -313,10 +348,10 @@ func (m *RoomStateManager) RemoveUserFromRoom(ctx context.Context, roomID, userI
 
 	// Update state with new user count
 	state.ActiveUsers = int(userCount)
+	state.LastActivity = time.Now()
 
-	// If room is empty, handle cleanup
+	// Handle empty room
 	if userCount == 0 {
-		// Keep the state around but mark as inactive
 		state.IsActive = false
 		err = m.client.SetObject(ctx, formatRoomStateKey(roomID), state, RoomInactiveExpiry)
 		if err != nil {
@@ -325,28 +360,39 @@ func (m *RoomStateManager) RemoveUserFromRoom(ctx context.Context, roomID, userI
 		}
 
 		logger.Info("Room is now empty", "roomId", roomID)
-		return nil
+	} else {
+		// Room still has users, update normally
+		err = m.UpdateRoomState(ctx, state)
+		if err != nil {
+			return err
+		}
 	}
 
-	// If the user was in the DJ queue, remove them
-	m.RemoveUserFromQueue(ctx, roomID, userID)
+	// Clean up user's presence
+	userObjID, err := bson.ObjectIDFromHex(userID)
+	if err != nil {
+		logger.Error("Failed to parse user ID", err, "userId", userID)
+		return err
+	}
 
-	// If the user was the current DJ, advance to next DJ
+	// Update presence to remove room association
+	presenceMgr := NewPresenceManager(m.client)
+	err = presenceMgr.SetUserRoom(ctx, userObjID, "")
+	if err != nil {
+		logger.Error("Failed to update user presence", err, "userId", userID)
+		// Continue anyway as the user is removed from the room
+	}
+
+	// Handle DJ queue if necessary
 	if state.CurrentDJ == userID {
 		err = m.AdvanceDJ(ctx, roomID)
 		if err != nil {
 			logger.Error("Failed to advance DJ after user left", err, "roomId", roomID, "userId", userID)
-			// Continue anyway, as we still want to update the state
+			// Continue anyway as the user is removed from the room
 		}
 	}
 
-	// Update state
-	err = m.UpdateRoomState(ctx, state)
-	if err != nil {
-		return err
-	}
-
-	logger.Info("Removed user from room", "roomId", roomID, "userId", userID, "activeUsers", userCount)
+	logger.Info("Removed user from room with presence cleanup", "roomId", roomID, "userId", userID, "activeUsers", userCount)
 	return nil
 }
 

@@ -322,19 +322,13 @@ func (m *Manager) JoinRoom(ctx context.Context, roomID, userID bson.ObjectID) er
 		return errors.New("user is banned from this room")
 	}
 
-	// Add user to Redis first
+	// Add user to Redis
 	err = m.stateManager.AddUserToRoom(ctx, roomID.Hex(), userID.Hex())
 	if err != nil {
 		return fmt.Errorf("failed to add user to Redis: %w", err)
 	}
 
-	// Get updated room state with all users
-	state, err = m.GetRoomState(ctx, roomID)
-	if err != nil {
-		return fmt.Errorf("failed to get updated room state: %w", err)
-	}
-
-	// Update presence
+	// Update user presence
 	err = m.presenceManager.UpdatePresence(ctx, userID, user.Username, "online")
 	if err != nil {
 		m.logger.Error("Failed to update user presence", err, "userId", userID.Hex())
@@ -364,65 +358,47 @@ func (m *Manager) LeaveRoom(ctx context.Context, roomID, userID bson.ObjectID) e
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	// Get room state first to check if user is actually in the room
+	// Check Redis first for room membership
+	inRoom, err := m.stateManager.IsUserInRoom(ctx, roomID.Hex(), userID.Hex())
+	if err != nil {
+		m.logger.Error("Failed to check room membership in Redis", err, "roomId", roomID.Hex(), "userId", userID.Hex())
+		// Continue with cleanup even if Redis check fails
+	}
+
+	// If user is in Redis, remove them
+	if inRoom {
+		if err := m.stateManager.RemoveUserFromRoom(ctx, roomID.Hex(), userID.Hex()); err != nil {
+			m.logger.Error("Failed to remove user from Redis", err, "roomId", roomID.Hex(), "userId", userID.Hex())
+			// Continue with cleanup even if Redis removal fails
+		}
+	}
+
+	// Clean up user presence regardless of room state
+	if err := m.cleanupUserPresence(ctx, userID); err != nil {
+		m.logger.Error("Failed to cleanup user presence", err, "userId", userID.Hex())
+		// Continue with cleanup even if presence cleanup fails
+	}
+
+	// Get room state to update user count and activity
 	state, err := m.GetRoomState(ctx, roomID)
 	if err != nil {
 		if errors.Is(err, models.ErrRoomNotFound) {
-			// If room doesn't exist, just clean up user presence
-			if err := m.cleanupUserPresence(ctx, userID); err != nil {
-				m.logger.Error("Failed to cleanup user presence", err, "userId", userID.Hex())
-			}
+			// Room doesn't exist, cleanup is done
 			return nil
 		}
-		return err
-	}
-
-	// Check if user is in room
-	userInRoom := false
-	for _, u := range state.Users {
-		if u.ID == userID {
-			userInRoom = true
-			break
-		}
-	}
-
-	// Even if user is not in room, we should still clean up their presence
-	if !userInRoom {
-		if err := m.cleanupUserPresence(ctx, userID); err != nil {
-			m.logger.Error("Failed to cleanup user presence", err, "userId", userID.Hex())
-		}
-		return nil
-	}
-
-	// Remove user from Redis first
-	if err := m.stateManager.RemoveUserFromRoom(ctx, roomID.Hex(), userID.Hex()); err != nil {
-		m.logger.Error("Failed to remove user from Redis", err, "roomId", roomID.Hex(), "userId", userID.Hex())
-		// Continue with cleanup even if Redis removal fails
-	}
-
-	// Get updated room state after user removal
-	updatedState, err := m.GetRoomState(ctx, roomID)
-	if err != nil {
-		m.logger.Error("Failed to get updated room state", err, "roomId", roomID.Hex())
+		m.logger.Error("Failed to get room state", err, "roomId", roomID.Hex())
 		// Continue with cleanup even if state fetch fails
 	} else {
 		// Update room state with new user count
-		updatedState.ActiveUsers = len(updatedState.Users)
-		if err := m.UpdateRoomState(ctx, roomID, updatedState); err != nil {
+		state.ActiveUsers = len(state.Users)
+		if err := m.UpdateRoomState(ctx, roomID, state); err != nil {
 			m.logger.Error("Failed to update room state", err, "roomId", roomID.Hex())
 		}
-	}
 
-	// Clean up user presence
-	if err := m.cleanupUserPresence(ctx, userID); err != nil {
-		m.logger.Error("Failed to cleanup user presence", err, "userId", userID.Hex())
-		// Continue with room update even if presence cleanup fails
-	}
-
-	// Update room last activity
-	if err := m.updateRoomActivity(ctx, roomID); err != nil {
-		m.logger.Error("Failed to update room activity", err, "roomId", roomID.Hex())
-		// Continue anyway as the user has been removed
+		// Update room last activity
+		if err := m.updateRoomActivity(ctx, roomID); err != nil {
+			m.logger.Error("Failed to update room activity", err, "roomId", roomID.Hex())
+		}
 	}
 
 	return nil
@@ -476,26 +452,30 @@ func (m *Manager) IsUserInRoom(ctx context.Context, roomID, userID bson.ObjectID
 
 	// If user is in room, verify their presence status
 	presence, err := m.presenceManager.GetPresence(ctx, userID)
-	if err != nil {
-		// Log but don't fail the check just because we couldn't verify presence
-		m.logger.Error("Failed to get user presence", err, "userId", userID.Hex())
-		return true, nil
-	}
+	if err != nil || presence == nil || presence.Status != "online" {
+		// User is not online, clean up their state
+		if err := m.stateManager.RemoveUserFromRoom(ctx, roomID.Hex(), userID.Hex()); err != nil {
+			m.logger.Error("Failed to remove offline user from room", err, "userId", userID.Hex())
+		}
 
-	// If we can verify presence, ensure user is online
-	if presence != nil && presence.Status == "online" {
-		return true, nil
-	}
-
-	// User is in room but appears offline, schedule cleanup but still return true
-	go func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		if err := m.cleanupUserPresence(cleanupCtx, userID); err != nil {
+		if err := m.cleanupUserPresence(ctx, userID); err != nil {
 			m.logger.Error("Failed to cleanup user presence", err, "userId", userID.Hex())
 		}
-	}()
+
+		// Get updated room state after cleanup
+		state, err := m.GetRoomState(ctx, roomID)
+		if err != nil {
+			m.logger.Error("Failed to get updated room state", err, "roomId", roomID.Hex())
+		} else {
+			// Update room state with new user count
+			state.ActiveUsers = len(state.Users)
+			if err := m.UpdateRoomState(ctx, roomID, state); err != nil {
+				m.logger.Error("Failed to update room state", err, "roomId", roomID.Hex())
+			}
+		}
+
+		return false, nil
+	}
 
 	return true, nil
 }

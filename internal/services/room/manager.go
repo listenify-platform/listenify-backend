@@ -196,7 +196,7 @@ func (m *Manager) GetRoomState(ctx context.Context, roomID bson.ObjectID) (*mode
 		return nil, err
 	}
 
-	// Fetch user details for each ID
+	// Fetch user details for each ID and verify online status
 	users := make([]models.PublicUser, 0, len(userIDs))
 	for _, userIDStr := range userIDs {
 		userID, err := bson.ObjectIDFromHex(userIDStr)
@@ -205,13 +205,36 @@ func (m *Manager) GetRoomState(ctx context.Context, roomID bson.ObjectID) (*mode
 			continue
 		}
 
+		// Check user's presence status
+		presence, err := m.presenceManager.GetPresence(ctx, userID)
+		if err != nil {
+			m.logger.Error("Failed to get user presence", err, "userId", userIDStr)
+			// Remove user from room since we can't verify their status
+			if err := m.stateManager.RemoveUserFromRoom(ctx, roomID.Hex(), userIDStr); err != nil {
+				m.logger.Error("Failed to remove stale user from room", err, "userId", userIDStr)
+			}
+			continue
+		}
+
+		// If user is not online or has no presence data, remove them from room
+		if presence == nil || presence.Status != "online" {
+			if err := m.stateManager.RemoveUserFromRoom(ctx, roomID.Hex(), userIDStr); err != nil {
+				m.logger.Error("Failed to remove offline user from room", err, "userId", userIDStr)
+			}
+			continue
+		}
+
+		// Get user details
 		user, err := m.userRepo.FindByID(ctx, userID)
 		if err != nil {
 			m.logger.Error("Failed to get user", err, "userId", userIDStr)
 			continue
 		}
 
-		users = append(users, user.ToPublicUser())
+		// Add user to room state
+		publicUser := user.ToPublicUser()
+		publicUser.Online = true
+		users = append(users, publicUser)
 	}
 
 	// Create room state with all information
@@ -375,6 +398,19 @@ func (m *Manager) LeaveRoom(ctx context.Context, roomID, userID bson.ObjectID) e
 	if err := m.stateManager.RemoveUserFromRoom(ctx, roomID.Hex(), userID.Hex()); err != nil {
 		m.logger.Error("Failed to remove user from Redis", err, "roomId", roomID.Hex(), "userId", userID.Hex())
 		// Continue with cleanup even if Redis removal fails
+	}
+
+	// Get updated room state after user removal
+	updatedState, err := m.GetRoomState(ctx, roomID)
+	if err != nil {
+		m.logger.Error("Failed to get updated room state", err, "roomId", roomID.Hex())
+		// Continue with cleanup even if state fetch fails
+	} else {
+		// Update room state with new user count
+		updatedState.ActiveUsers = len(updatedState.Users)
+		if err := m.UpdateRoomState(ctx, roomID, updatedState); err != nil {
+			m.logger.Error("Failed to update room state", err, "roomId", roomID.Hex())
+		}
 	}
 
 	// Clean up user presence

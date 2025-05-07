@@ -15,16 +15,16 @@ server:
 # Database configuration
 database:
   mongodb:
-    uri: "mongodb+srv://administrator:m6wyYqjtg6XT4jBB@listenify.zyi5t.mongodb.net/?retryWrites=true&w=majority&appName=listenify"
+    uri: ""
     database: "listenify"
     timeout: "10s"
     max_pool_size: 100
     min_pool_size: 10
     max_idle_time: "60s"
   redis:
-    addresses: ["redis-19814.c250.eu-central-1-1.ec2.redns.redis-cloud.com:19814"]
+    addresses: [""]
     username: "root"
-    password: "M73eBKqE6@TM3ZU"
+    password: ""
     database: 0
     max_retries: 3
     pool_size: 100
